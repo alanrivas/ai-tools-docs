@@ -1,0 +1,8 @@
+{
+  "label": "MCP Servers",
+  "position": 7,
+  "link": {
+    "type": "doc",
+    "id": "mcp-servers/index"
+  }
+}

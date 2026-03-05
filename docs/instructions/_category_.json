@@ -1,0 +1,8 @@
+{
+  "label": "Instructions y Prompts",
+  "position": 5,
+  "link": {
+    "type": "doc",
+    "id": "instructions/index"
+  }
+}
