@@ -45,39 +45,141 @@ Puedes crear múltiples agentes especializados y combinarlos en un flujo de trab
 
 ## Claude Code
 
-Claude Code no tiene un sistema formal de "skills". En su lugar, utiliza dos mecanismos complementarios:
+Claude Code tiene un sistema de skills propio con tres piezas que trabajan juntas. Es importante distinguirlas porque cumplen roles distintos:
 
-1. **`CLAUDE.md`**: Archivo de instrucciones persistentes que actúa como contexto global del proyecto.
-2. **Comandos slash personalizados** (`/user:mi-comando`): Scripts que se almacenan en `~/.claude/commands/` y pueden invocarse como shortcuts reutilizables.
-
-```bash
-# Estructura de comandos personalizados
-~/.claude/commands/
-├── revisar-pr.md
-├── generar-tests.md
-└── documentar-funcion.md
+```
+~/.claude/
+├── commands/   ← slash commands (el alias que escribe el usuario)
+├── skills/     ← la lógica del skill (instrucciones que sigue Claude)
+└── agents/     ← subprocesos especializados que lanza el skill
 ```
 
-Ejemplo de un comando personalizado en `~/.claude/commands/revisar-pr.md`:
+### Las tres piezas y cómo se relacionan
+
+#### 1. Command (`~/.claude/commands/nombre.md`)
+
+Es solo un **alias**. Cuando escribes `/deploy-gh-pages`, Claude carga el texto del archivo y lo trata como instrucciones. No tiene lógica propia — su único trabajo es ser un nombre corto que activa un skill.
 
 ```markdown
-# Revisar Pull Request
+<!-- ~/.claude/commands/deploy-gh-pages.md -->
+---
+name: deploy-gh-pages
+description: Setup completo de deploy de un sitio Docusaurus en GitHub Pages.
+argument-hint: "[org=TU-ORG repo=TU-REPO domain=TU-DOMINIO]"
+---
 
-Analiza el código del PR actual siguiendo estas pautas:
-
-1. **Seguridad**: Busca vulnerabilidades comunes (XSS, SQL injection, secretos expuestos)
-2. **Rendimiento**: Identifica operaciones costosas o algoritmos ineficientes
-3. **Cobertura de tests**: Verifica que los cambios tienen tests adecuados
-4. **Convenciones**: Confirma que sigue el estilo del proyecto definido en CLAUDE.md
-
-Formato de respuesta:
-- Resumen ejecutivo (2-3 oraciones)
-- Lista de hallazgos por severidad
-- Sugerencias de mejora concretas con ejemplos de código
+Deploy this Docusaurus project to GitHub Pages with a custom domain.
+First, extract org, repo, and domain...
 ```
 
-:::info
-Los comandos slash se invocan con `/user:revisar-pr` dentro de una sesión de Claude Code.
+#### 2. Skill (`~/.claude/skills/nombre/SKILL.md`)
+
+Es la **lógica real**. Claude (el de tu conversación) lee estas instrucciones y las sigue. Puede preguntarte cosas si le falta información, puede leer el contexto de la conversación, y puede decidir lanzar un agente cuando tenga todos los datos.
+
+```markdown
+<!-- ~/.claude/skills/deploy-gh-pages/SKILL.md -->
+---
+name: deploy-gh-pages
+description: |
+  Setup completo de deploy de un sitio Docusaurus en GitHub Pages
+  con dominio personalizado via Cloudflare. Configura docusaurus.config.ts,
+  crea CNAME, crea el workflow de GitHub Actions, y verifica DNS y HTTPS.
+argument-hint: "[org=TU-ORG repo=TU-REPO domain=TU-DOMINIO]"
+---
+
+Deploy this Docusaurus project to GitHub Pages with a custom domain.
+
+First, extract these three values (from the user's message, from CLAUDE.md
+context, or from git remote + docusaurus.config.ts):
+- `org` — GitHub username or organization
+- `repo` — repository name (exact, case-sensitive)
+- `domain` — full custom subdomain (e.g., `my-project.alanrivas.me`)
+
+If any value is missing, **ask the user** for it before doing anything else.
+
+Once you have all three values, use the `static-site-deployer` agent to
+execute the full deployment pipeline:
+1. Update `docusaurus.config.ts`
+2. Create `static/CNAME`
+3. Create `.github/workflows/deploy.yml`
+4. Commit and push
+5. Configure GitHub Pages via gh CLI
+6. Verify DNS and HTTPS
+```
+
+#### 3. Agent (`~/.claude/agents/nombre.md`)
+
+Es un **subproceso separado** que el skill lanza para el trabajo pesado. Tiene su propio contexto aislado y ejecuta decenas de tool calls (bash, edición de archivos, llamadas a APIs) sin aparecer en la conversación principal.
+
+```markdown
+<!-- ~/.claude/agents/static-site-deployer.md -->
+---
+name: static-site-deployer
+description: Deploys Docusaurus/static sites to GitHub Pages with optional
+             custom domain via Cloudflare DNS.
+tools: Bash, Read, Edit, Write, Glob, Grep
+---
+
+You are a deployment specialist for static sites on GitHub Pages.
+
+## Deployment checklist
+1. Update docusaurus.config.ts — set url, organizationName, projectName, trailingSlash
+2. Create static/CNAME — bare domain, no protocol
+3. Create .github/workflows/deploy.yml — use exact workflow below
+...
+```
+
+Observa el campo `tools` en el frontmatter del agent: lista explícitamente qué tools de Claude Code puede usar. En este caso: `Bash, Read, Edit, Write, Glob, Grep`.
+
+### Anatomía del frontmatter de un skill de Claude Code
+
+```markdown
+---
+name: nombre-del-skill          ← identificador (kebab-case)
+description: |                  ← cuándo Claude debe activar este skill
+  Una o dos frases explicando
+  el propósito y cuándo usarlo.
+argument-hint: "[arg=valor]"    ← texto de ayuda en el autocompletado (opcional)
+---
+
+Instrucciones en Markdown puro que Claude seguirá...
+```
+
+El campo más crítico es `description`: Claude lo lee para decidir si este skill aplica al pedido del usuario. Si la descripción es imprecisa, el skill se activará cuando no debe o no se activará cuando sí debe.
+
+### Flujo completo en Claude Code
+
+```
+Usuario escribe: /deploy-gh-pages
+        │
+        ▼
+Command (~/.claude/commands/deploy-gh-pages.md)
+  └── solo carga el texto del skill
+        │
+        ▼
+Skill (~/.claude/skills/deploy-gh-pages/SKILL.md)
+  └── Claude de la conversación lee las instrucciones
+  └── extrae org/repo/domain del contexto o pregunta al usuario
+  └── lanza el agente cuando tiene todo
+        │
+        ▼
+Agent (~/.claude/agents/static-site-deployer.md)
+  └── Claude separado, contexto aislado
+  └── usa tools: Read, Edit, Write, Bash, Glob, Grep
+  └── ejecuta ~30 tool calls autónomamente
+  └── devuelve tabla ✅/⚠️/❌
+```
+
+### Tools disponibles en Claude Code
+
+Las tools que se pueden declarar en el frontmatter de un agent son las capacidades nativas de Claude Code. Ver la sección [¿Qué son los Skills? → Las tools de Claude Code](/skills#las-tools-de-claude-code) para la referencia completa.
+
+:::info Command vs Skill en Claude Code
+La distinción puede parecer redundante, pero tiene un propósito:
+- El **command** es para el usuario: aparece en el autocompletado de `/`
+- El **skill** es para Claude: contiene la lógica real que Claude ejecuta
+
+Puedes tener un skill sin command (Claude lo detecta por descripción en lenguaje natural) o un command sin skill dedicado (el command mismo contiene las instrucciones). Separar ambos permite mantener las instrucciones detalladas en el skill sin contaminar el autocompletado.
 :::
 
 ---
