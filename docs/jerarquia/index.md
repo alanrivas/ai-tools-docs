@@ -543,10 +543,128 @@ Cada pieza tiene una responsabilidad clara. Ninguna hace más de lo que le corre
 
 Cuando no sabes dónde poner algo, usa esta regla:
 
-- **¿Es una regla que siempre aplica?** → Instructions
-- **¿Es una acción que el usuario invoca manualmente?** → Command
-- **¿Es la lógica de cómo ejecutar esa acción?** → Skill
-- **¿Es una tarea que necesita autonomía y aislamiento?** → Agent
-- **¿Es una reacción automática a algo que hace Claude?** → Hook
-- **¿Necesita conectarse a un sistema externo?** → MCP Server
-- **¿Es solo leer/escribir/ejecutar algo concreto?** → Tool directamente
+---
+
+### ¿Es una regla que siempre aplica? → **Instructions**
+
+✅ **Sí es Instructions si...**
+1. "Siempre usa `const` por defecto en TypeScript" — estilo de código que aplica en toda conversación
+2. "No modifiques archivos en `/legacy`" — restricción de zona que debe recordarse siempre
+3. "El stack es Node.js 22, npm, sin yarn ni bun" — contexto técnico del proyecto
+4. "Este es un sistema bancario regulado, ten cuidado con los datos" — dominio crítico que siempre debe considerarse
+5. "Al terminar cualquier tarea, ejecuta `npm run lint`" — convención de fin de tarea que aplica siempre
+
+❌ **No es Instructions si...**
+1. "Cuando el usuario escribe /deploy, hacer X" — eso tiene activador, es un Command
+2. "Pasos para hacer un deploy a GitHub Pages" — eso es una receta específica, es una Skill
+3. "Bloquear escrituras en /etc" — eso intercepta una acción concreta, es un Hook
+4. "Loguear cada vez que Claude usa Bash" — eso reacciona a un evento, es un Hook
+5. "Cómo conectarse a la base de datos de producción" — eso es acceso a sistema externo, es MCP
+
+---
+
+### ¿Es una acción que el usuario invoca manualmente? → **Command**
+
+✅ **Sí es Command si...**
+1. `/deploy-gh-pages` — el usuario escribe este atajo para iniciar un deploy
+2. `/check-deployment` — el usuario lo invoca cuando quiere ver el estado del sitio
+3. `/commit` — atajo para que Claude haga el commit con mensaje generado
+4. `/review-pr` — el usuario lo activa cuando tiene un PR listo para revisar
+5. `/generar-tests` — el usuario pide que Claude genere tests para el archivo actual
+
+❌ **No es Command si...**
+1. "Los pasos que sigue el deploy" — eso es la lógica interna, es una Skill
+2. "Validar que los parámetros estén completos" — eso es parte de la lógica, va en la Skill
+3. "Ejecutar git push" — eso es una operación concreta, es una Tool (Bash)
+4. "Cada vez que Claude edite un archivo, correr el linter" — eso es automático, es un Hook
+5. "Conectarse a GitHub API para leer PRs" — eso es integración externa, es MCP
+
+---
+
+### ¿Es la lógica de cómo ejecutar esa acción? → **Skill**
+
+✅ **Sí es Skill si...**
+1. Los pasos para hacer deploy: obtener parámetros → actualizar config → crear CNAME → push → verificar
+2. La secuencia para revisar un PR: leer diff → analizar cambios → generar comentarios → reportar
+3. El proceso para generar tests: leer el archivo → identificar funciones → escribir casos → verificar cobertura
+4. Cómo hacer un release: bump version → actualizar changelog → crear tag → push → notificar
+5. El flujo para documentar código: leer archivo → identificar funciones sin doc → escribir JSDoc → guardar
+
+❌ **No es Skill si...**
+1. "Siempre documenta las funciones públicas" — eso es una preferencia permanente, es Instructions
+2. "/documentar" — eso es solo el atajo del usuario, es un Command
+3. "Correr el agente que hace el deploy" — eso es un subproceso autónomo, es un Agent
+4. "Leer el archivo src/utils.ts" — eso es una operación atómica, es la Tool Read
+5. "Enviar notificación a Slack al terminar" — eso es integración externa, es MCP
+
+---
+
+### ¿Es una tarea que necesita autonomía y aislamiento? → **Agent**
+
+✅ **Sí es Agent si...**
+1. El proceso completo de deploy: modificar 3 archivos, hacer commit, push, configurar GitHub Pages, verificar DNS — muchos pasos, contexto propio
+2. Auditar todo el código del proyecto buscando vulnerabilidades — tarea larga que no debe mezclar contexto con el usuario
+3. Migrar una base de datos: leer esquema, generar script, aplicar, verificar — requiere acceso aislado a tools específicas
+4. Analizar y corregir todos los broken links de un sitio — múltiple iteraciones autónomas sin intervención
+5. Ejecutar un benchmark completo: correr tests, medir tiempos, generar reporte — proceso autónomo con su propia lógica
+
+❌ **No es Agent si...**
+1. "Los pasos para hacer el deploy" — eso es la receta, es una Skill (el Agent la ejecuta)
+2. "Leer el package.json del proyecto" — eso es una sola operación, es la Tool Read
+3. "/deploy" — eso es el punto de entrada del usuario, es un Command
+4. "Siempre hacer pull antes de push" — eso es una regla, es Instructions
+5. "Bloquear si el código tiene `console.log`" — eso intercepta una acción, es un Hook
+
+---
+
+### ¿Es una reacción automática a algo que hace Claude? → **Hook**
+
+✅ **Sí es Hook si...**
+1. "Después de cada Edit, correr el linter automáticamente" — PostToolUse(Edit)
+2. "Antes de cada Bash, loguear el comando en un archivo de auditoría" — PreToolUse(Bash)
+3. "Si Claude intenta escribir en `/etc`, bloquearlo" — PreToolUse(Write) con lógica de path
+4. "Cuando Claude termine de responder, enviar una notificación de Desktop" — evento Stop
+5. "Después de cada Write, verificar que el archivo no tiene secrets (.env patterns)" — PostToolUse(Write)
+
+❌ **No es Hook si...**
+1. "Siempre corre el linter al final de cada tarea" — si es una preferencia que el LLM decide, es Instructions
+2. "El usuario puede pedir `/lint` para correr el linter" — si el usuario lo invoca, es Command
+3. "Correr el linter como parte del proceso de deploy" — si está en el flujo de deploy, es parte de una Skill
+4. "Notificar a Slack cuando el deploy termina" — si requiere la API de Slack, es MCP
+5. "Verificar que los tests pasan" — si es una validación que el LLM decide hacer, es Instructions o Skill
+
+---
+
+### ¿Necesita conectarse a un sistema externo? → **MCP Server**
+
+✅ **Sí es MCP si...**
+1. Crear una tabla en Supabase — necesita conectarse a la DB de producción
+2. Crear un Worker en Cloudflare — necesita la API de Cloudflare con autenticación
+3. Leer eventos del Google Calendar para encontrar tiempo libre — API externa con OAuth
+4. Crear una página en Notion — API de Notion con token
+5. Consultar métricas de Datadog — API externa con autenticación
+
+❌ **No es MCP si...**
+1. "Leer el archivo `db/schema.sql`" — ese archivo está en el proyecto, es la Tool Read
+2. "Ejecutar `psql` localmente" — eso es un proceso local, es la Tool Bash
+3. "Generar una query SQL" — eso es razonamiento del LLM, no necesita conexión externa
+4. "Bloquear si Claude intenta leer archivos de credenciales" — eso intercepta acciones, es un Hook
+5. "Pasos para hacer una migración" — eso es una receta, es una Skill (aunque use MCP internamente)
+
+---
+
+### ¿Es solo leer/escribir/ejecutar algo concreto? → **Tool directamente**
+
+✅ **Sí es Tool directamente si...**
+1. Leer el contenido de `package.json` — Tool: Read
+2. Buscar todos los archivos `.test.ts` en el proyecto — Tool: Glob
+3. Encontrar todos los usos de `console.log` en el código — Tool: Grep
+4. Crear un nuevo archivo `CHANGELOG.md` — Tool: Write
+5. Ejecutar `npm test` para ver si los tests pasan — Tool: Bash
+
+❌ **No es solo una Tool si...**
+1. "Hacer un deploy completo" — eso son muchos pasos coordinados, es una Skill + Agent
+2. "Revisar el código y corregir errores de estilo" — eso implica razonamiento + múltiples edits, es un Agent
+3. "Cada vez que se edite un archivo, correr el linter" — eso es reactivo a eventos, es un Hook
+4. "Leer el esquema de la base de datos de producción" — eso requiere conexión externa, es MCP
+5. "Siempre usar `const` en TypeScript" — eso es una preferencia persistente, es Instructions
