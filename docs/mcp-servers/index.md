@@ -111,7 +111,7 @@ Cada servidor es un proceso independiente. La IA habla con todos ellos usando el
 
 ## MCP vs Tools nativas
 
-Es importante distinguir MCP de las [tools nativas de Claude Code](/tools):
+Es importante distinguir MCP de las [tools nativas de Claude Code](/docs/tools):
 
 | | Tools nativas (Read, Bash, etc.) | MCP Tools |
 |--|----------------------------------|-----------|

@@ -172,7 +172,7 @@ Agent (~/.claude/agents/static-site-deployer.md)
 
 ### Tools disponibles en Claude Code
 
-Las tools que se pueden declarar en el frontmatter de un agent son las capacidades nativas de Claude Code. Ver la sección [¿Qué son los Skills? → Las tools de Claude Code](/skills#las-tools-de-claude-code) para la referencia completa.
+Las tools que se pueden declarar en el frontmatter de un agent son las capacidades nativas de Claude Code. Ver la [referencia completa de tools nativas](/docs/tools).
 
 :::info Command vs Skill en Claude Code
 La distinción puede parecer redundante, pero tiene un propósito:

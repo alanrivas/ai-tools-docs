@@ -76,7 +76,7 @@ description: |
 
 ### 3. `tools` — las capacidades disponibles
 
-La lista de [tools nativas](/tools) que el agente puede usar. Si no está listada, no la puede usar.
+La lista de [tools nativas](/docs/tools) que el agente puede usar. Si no está listada, no la puede usar.
 
 ```yaml
 tools: Read, Glob, Grep, Write, Bash
