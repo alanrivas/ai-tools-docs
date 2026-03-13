@@ -104,6 +104,13 @@ const sidebars: SidebarsConfig = {
       label: 'Anti-patrones',
       items: ['antipatrones/index'],
     },
+    {
+      type: 'category',
+      label: 'Jerarquía de Automatización',
+      items: [
+        'jerarquia/index',
+      ],
+    },
     'glosario/index',
     'cheatsheet/index',
   ],
