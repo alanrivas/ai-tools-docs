@@ -6,150 +6,196 @@ slug: /agentes
 
 # ¿Qué son los Agentes de IA?
 
-Los agentes son una de las evoluciones más importantes en la forma de trabajar con IA. Un agente no es simplemente una IA que responde preguntas — es una entidad autónoma que puede **tomar decisiones**, **usar herramientas**, y **completar tareas de múltiples pasos** sin supervisión constante.
+Un **agente** es una instancia independiente de IA que recibe una tarea, la ejecuta de forma autónoma usando herramientas, y devuelve un resultado. No es una conversación — es un proceso de trabajo.
+
+La diferencia fundamental con un chat o un skill: el agente **no necesita que estés presente** mientras trabaja.
 
 ---
 
-## Definición
+## El problema que resuelven
 
-Un **agente de IA** es una entidad de IA especializada que:
-
-1. Tiene un **propósito específico** (revisar código, generar tests, analizar seguridad)
-2. Puede **usar herramientas** (leer archivos, ejecutar comandos, hacer búsquedas)
-3. Tiene **instrucciones propias** que definen su comportamiento
-4. Puede **tomar decisiones** sobre cómo completar una tarea
-
-La diferencia fundamental con una conversación de chat normal:
+Sin agentes, cada tarea de múltiples pasos requiere que tú coordines cada paso:
 
 ```
-Chat normal:
-  Tú → "¿Cómo puedo escribir un test para esta función?"
-  IA  → "Aquí tienes un ejemplo: ..."
-  Tú  → [copias el ejemplo manualmente]
-  Tú  → "Ahora necesito también mocks para las dependencias..."
-  IA  → "Aquí están los mocks: ..."
-  [Ciclo manual infinito]
+Sin agente:
+  Tú → "¿Cómo escribo el test para esta función?"
+  IA  → "Aquí un ejemplo..."
+  Tú  → [copias manualmente]
+  Tú  → "Ahora el mock de la dependencia..."
+  IA  → "Aquí el mock..."
+  Tú  → [copias, ajustas, ejecutas, corriges]
+  [Ciclo manual indefinido]
 
-Agente:
-  Tú   → "@test-generator Genera tests completos para src/services/"
-  IA   → [lee los archivos automáticamente]
-        [analiza las dependencias]
-        [crea los archivos de test]
-        [ejecuta los tests para verificar]
-        [reporta: "Creé 12 archivos de test, 87 tests pasando"]
+Con agente:
+  Tú → "@test-generator genera tests para src/services/"
+  AG  → [lee todos los archivos]
+        [analiza dependencias]
+        [crea archivos de test]
+        [ejecuta y verifica]
+        → "12 archivos creados, 87 tests pasando"
 ```
 
 ---
 
-## ¿Qué problema resuelven los agentes?
+## Anatomía de un agente
 
-### El problema: tareas repetitivas de múltiples pasos
+Un agente tiene cinco partes. Conocerlas te permite diseñar agentes que hacen exactamente lo que necesitas — ni más ni menos.
 
-Muchas tareas de desarrollo son predecibles pero tediosas:
+```
+┌─────────────────────────────────────────────────┐
+│                   AGENTE                        │
+│                                                 │
+│  1. name         ← identificador               │
+│  2. description  ← cuándo invocarlo            │
+│  3. tools        ← qué puede hacer             │
+│  ─────────────────────────────────────────────  │
+│  4. instructions ← cómo debe comportarse       │
+│  5. context      ← información adicional       │
+└─────────────────────────────────────────────────┘
+```
 
-- Revisar PRs siguiendo siempre los mismos criterios
-- Generar tests unitarios para nuevas funciones
-- Documentar código con JSDoc/docstrings
-- Analizar seguridad de nuevos endpoints
-- Refactorizar código para seguir convenciones del proyecto
+### 1. `name` — el identificador
 
-Sin agentes, esto requiere:
-1. Recordar el prompt correcto cada vez
-2. Copiar el contexto relevante
-3. Ejecutar el resultado manualmente
-4. Verificar que funcionó
-5. Repetir para cada archivo/función
+Cómo se llama el agente. Se usa para invocarlo.
 
-Con agentes, describes la tarea una vez y el agente la ejecuta completa.
+```yaml
+name: test-generator
+```
+
+### 2. `description` — el criterio de activación
+
+Le dice al sistema cuándo este agente es el apropiado. Afecta directamente si el agente se activa en el momento correcto. Una descripción vaga produce un agente que se invoca mal o que no se invoca.
+
+```yaml
+description: |
+  Genera tests unitarios y de integración para código TypeScript/JavaScript.
+  Usa este agente cuando necesites crear tests para funciones, clases o módulos
+  nuevos o existentes. Sigue las convenciones del proyecto (Jest, naming *spec.ts).
+  NO usar para análisis de cobertura — hay un agente específico para eso.
+```
+
+### 3. `tools` — las capacidades disponibles
+
+La lista de [tools nativas](/tools) que el agente puede usar. Si no está listada, no la puede usar.
+
+```yaml
+tools: Read, Glob, Grep, Write, Bash
+# Read/Glob/Grep → para leer código existente
+# Write → para crear los archivos de test
+# Bash → para ejecutar jest y verificar que pasan
+```
+
+:::tip Principio de menor privilegio
+Declara solo las tools necesarias. Un agente de análisis no necesita `Write` ni `Bash`. Menos tools = menos superficie de error y más predecible.
+:::
+
+### 4. `instructions` — el comportamiento
+
+El conjunto de reglas, pasos y criterios que el agente sigue. Es la "personalidad" del agente.
+
+```markdown
+Cuando generes tests:
+1. Lee el archivo fuente completo antes de empezar
+2. Identifica: funciones públicas, casos borde, errores posibles
+3. Crea un archivo spec.ts junto al archivo original
+4. Nombra los tests descriptivamente: describe("AuthService", () => ...)
+5. Ejecuta jest --testPathPattern para verificar que pasan
+6. Si fallan, corrige antes de reportar
+```
+
+### 5. `context` — información adicional (opcional)
+
+Archivos o datos adicionales que el agente debe tener disponibles. Por ejemplo, las instrucciones del repositorio.
+
+```yaml
+context:
+  - file: CLAUDE.md        # convenciones del proyecto
+  - file: jest.config.ts   # configuración de tests
+```
 
 ---
 
-## ¿Cómo se hacía antes?
+## Agentes vs Skills vs Commands
 
-Antes de los agentes, el flujo típico era:
+La confusión más habitual es no saber si algo debe ser un agente, un skill o un command. La diferencia está en **quién ejecuta el trabajo y con qué capacidad de interacción**:
 
-```
-1. Abrir chat de IA
-2. Re-explicar el contexto del proyecto ("estamos usando TypeScript, Express, etc.")
-3. Pegar el código del archivo
-4. Pedir lo que necesitabas
-5. Copiar la respuesta
-6. Pegar manualmente en el editor
-7. Ajustar porque faltaba contexto
-8. Repetir para el siguiente archivo
-```
+| | Command | Skill | Agent |
+|--|---------|-------|-------|
+| **¿Quién ejecuta?** | Nadie — es un alias | Claude de tu conversación | Claude nuevo, aislado |
+| **¿Ve la conversación?** | — | Sí, toda | No, contexto vacío |
+| **¿Puede preguntar al usuario?** | — | Sí | No |
+| **¿Puede ejecutar tools?** | No | Sí | Sí |
+| **Volumen de tool calls** | — | Bajo (2-5) | Alto (10-50+) |
+| **Ideal para** | Alias de invocación | Coordinar y decidir | Ejecutar trabajo autónomo |
 
-Esto tenía varios problemas:
-- **Pérdida de contexto**: la IA no "sabía" el proyecto
-- **Trabajo manual**: copiar-pegar era inevitable
-- **Sin verificación**: la IA no podía saber si su respuesta funcionaba
-- **Sin acceso a herramientas**: la IA solo podía ver lo que tú le mostraras
+**Cuándo algo debe ser un agente y no un skill:**
+- Ejecuta más de ~5 tool calls seguidas
+- No necesita preguntar al usuario durante la ejecución
+- Puede beneficiarse de contexto aislado (no necesita ver la conversación)
+- Su trabajo puede ejecutarse en paralelo con otras cosas
+
+**Cuándo algo debe ser un skill y no un agente:**
+- Necesita preguntar al usuario si faltan datos
+- Necesita leer el historial de conversación para decidir qué hacer
+- Coordina varios agentes (el skill decide cuál lanzar y cuándo)
+- La lógica es corta y no contamina la conversación
 
 ---
 
-## Cómo funcionan los agentes
+## El ciclo de razonamiento (ReAct)
 
-### El ciclo de razonamiento (ReAct)
-
-Los agentes modernos usan un ciclo de **Razonamiento → Acción → Observación**:
+Los agentes no ejecutan instrucciones mecánicamente. Usan un ciclo de **Razonamiento → Acción → Observación** que les permite adaptarse a lo que encuentran:
 
 ```
 Tarea: "Analiza la seguridad del módulo de autenticación"
 
-1. RAZONAMIENTO: "Necesito ver los archivos de autenticación"
-2. ACCIÓN: leer src/auth/login.ts
-3. OBSERVACIÓN: [contenido del archivo]
-4. RAZONAMIENTO: "Veo que no hay rate limiting. Necesito ver si hay tests"
-5. ACCIÓN: buscar "rate limit" en el proyecto
-6. OBSERVACIÓN: "No se encontraron archivos relacionados"
-7. RAZONAMIENTO: "Encontré vulnerabilidades. Voy a generar el reporte"
-8. ACCIÓN: escribir security-report.md con los hallazgos
-9. COMPLETADO: "Encontré 3 vulnerabilidades críticas. Ver security-report.md"
+1. RAZONAMIENTO: "Necesito ver los archivos de autenticación primero"
+2. ACCIÓN: Read("src/auth/login.ts")
+3. OBSERVACIÓN: [ve el contenido — no hay rate limiting]
+
+4. RAZONAMIENTO: "No hay rate limiting. ¿Existen tests que lo cubran?"
+5. ACCIÓN: Grep("rate.limit", "src/")
+6. OBSERVACIÓN: "Sin resultados — no hay tests ni implementación"
+
+7. RAZONAMIENTO: "Encontré vulnerabilidades. Genero el reporte"
+8. ACCIÓN: Write("security-report.md", "# Vulnerabilidades encontradas...")
+9. COMPLETADO: "3 vulnerabilidades críticas. Ver security-report.md"
 ```
 
-### Herramientas que pueden usar los agentes
-
-| Herramienta | Qué puede hacer |
-|---|---|
-| `read_file` | Leer cualquier archivo del proyecto |
-| `write_file` | Crear o modificar archivos |
-| `search_code` | Buscar patrones en el código base |
-| `run_command` | Ejecutar comandos de terminal |
-| `web_search` | Buscar información en internet |
-| `list_directory` | Explorar la estructura del proyecto |
+Esto hace que el agente se comporte más como un profesional que razona que como un script que ejecuta pasos fijos.
 
 ---
 
-## Agentes vs. Modos de IA
+## Agentes especializados vs agente general
 
-Es útil entender la diferencia entre los distintos modos de trabajo con IA:
+**Agente general:** entiende cualquier tarea del proyecto. Útil, pero puede ser inconsistente porque sus instrucciones son genéricas.
 
-| Modo | Autonomía | Acceso a herramientas | Mejor para |
-|---|---|---|---|
-| Chat simple | Ninguna | No | Preguntas puntuales |
-| Autocomplete | Ninguna | No | Escritura de código |
-| Chat con contexto | Baja | Limitado | Explicaciones, revisiones |
-| **Agente** | **Alta** | **Completo** | **Tareas completas de múltiples pasos** |
-
----
-
-## Agentes especializados vs. Agente general
-
-Puedes tener:
-
-**Agente general:** Hace cualquier tarea relacionada con el proyecto. Útil pero puede ser menos consistente.
-
-**Agentes especializados:** Cada uno con un propósito claro:
+**Agentes especializados:** cada uno con un propósito claro y criterios específicos.
 
 ```
-@code-reviewer   → Solo revisa código, con criterios específicos
-@test-generator  → Solo genera tests, siguiendo tus convenciones
-@security-audit  → Solo analiza seguridad, con tu checklist
-@doc-writer      → Solo documenta código, en el formato de tu proyecto
+@code-reviewer   → revisa código con tu checklist exacto de seguridad y calidad
+@test-generator  → genera tests en el estilo de tu proyecto (Jest, naming, etc.)
+@security-audit  → analiza solo seguridad, con tu lista de vulnerabilidades conocidas
+@doc-writer      → documenta con JSDoc/TSDoc siguiendo el formato de tu equipo
 ```
 
-Los agentes especializados son más confiables porque tienen instrucciones más focalizadas y se pueden afinar para el caso de uso exacto.
+Los especializados producen resultados más consistentes porque sus instrucciones están enfocadas. Cambias el comportamiento de un agente editando su archivo — sin afectar al resto.
 
-:::tip Consejo práctico
-Empieza con 1-2 agentes que resuelvan tu dolor más grande. Luego expande. Un agente de revisión de código bien configurado puede ahorrarte horas por semana.
+:::tip Por dónde empezar
+Empieza con el agente que resuelve tu mayor dolor actual. Un agente de revisión de PR bien configurado puede ahorrarte horas por semana. Luego expande.
 :::
+
+---
+
+## Dónde se definen
+
+Dependiendo de la herramienta y el alcance:
+
+| Herramienta | Alcance usuario | Alcance repositorio |
+|-------------|----------------|---------------------|
+| **Claude Code** | `~/.claude/agents/nombre.md` | `.claude/agents/nombre.md` |
+| **GitHub Copilot CLI** | `~/.copilot/agents/nombre.yaml` | `.github/copilot/agents/nombre.yaml` |
+| **Cursor** | `~/.cursor/rules/` | `.cursor/rules/` |
+| **Gemini CLI** | `~/.gemini/settings.json` | `GEMINI.md` |
+
+Los agentes a nivel repositorio se comparten con todo el equipo. Los de nivel usuario solo los usas tú.

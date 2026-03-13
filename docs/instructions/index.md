@@ -6,159 +6,198 @@ slug: /instructions
 
 # Instructions y Prompts del Sistema
 
-Las instrucciones (o "system prompts") son texto que le das a la IA antes de que empiece a responder. Definen el **contexto permanente** de todas tus conversaciones con ella: quién es, qué sabe de tu proyecto, qué puede y no puede hacer.
+Las instrucciones del sistema son **texto que la IA lee antes de cada conversación**. Definen el contexto permanente del proyecto: qué es, qué tecnologías usa, cómo se trabaja en él, y qué está prohibido.
+
+No son prompts que escribes cada vez — son el contexto que ya está siempre ahí.
 
 ---
 
-## Definición
+## El problema que resuelven
 
-Las **instrucciones del sistema** son:
-
-1. **Contexto persistente**: información que la IA tiene disponible en TODA la conversación, sin que tengas que repetirla
-2. **Restricciones de comportamiento**: qué puede y qué no puede hacer
-3. **Convenciones del proyecto**: estilo de código, patrones, nomenclatura
-4. **Información del dominio**: qué hace el proyecto, qué tecnologías usa
-
-La diferencia entre instrucciones y un prompt normal:
+Sin instrucciones persistentes, cada conversación empieza desde cero:
 
 ```
-Prompt normal (en cada mensaje):
-  "Eres un experto en TypeScript. Usamos Express. No uses any. 
-   Siempre usa async/await. Ahora, genera un endpoint para..."
-
-Con instrucciones del sistema:
-  [Una vez, en el archivo de instrucciones]:
-  "Eres un experto en TypeScript. Usamos Express. No uses any..."
-  
-  [En cada conversación]:
-  "Genera un endpoint para..."
-```
-
----
-
-## ¿Qué problema resuelven?
-
-### El problema: re-explicar el contexto infinitamente
-
-Sin instrucciones persistentes:
-
-- Cada conversación nueva comienza desde cero
-- La IA no sabe que usas TypeScript (y genera JavaScript)
-- La IA no sabe que tienes un middleware de errores (y duplica lógica)
-- La IA no sabe tu estilo de naming (y rompe consistencia)
-- Pasas el 30% de cada conversación "onboarding" a la IA
+Sin instrucciones:
+  Conversación 1: "Somos TypeScript con Express, Prisma, no uses any,
+                   async/await siempre, errores con middleware central...
+                   ahora genera el endpoint de users"
+  Conversación 2: [misma explicación de nuevo]
+  Conversación 3: [misma explicación de nuevo]
+  [30% de cada conversación es onboarding a la IA]
 
 Con instrucciones:
+  [Una vez en CLAUDE.md]:
+  "TypeScript + Express + Prisma, no any, async/await, middleware de errores"
 
-- La IA ya sabe todo el contexto desde el primer mensaje
-- Puedes ir directo al punto ("genera endpoint de /users/`{id}`")
-- El resultado ya sigue tus convenciones sin pedírselo
-- El equipo completo tiene el mismo contexto
+  Conversación 1: "genera el endpoint de users"
+  Conversación 2: "revisa el módulo de auth"
+  Conversación 3: "crea los tests para OrderService"
+  [Vas directo al punto — la IA ya conoce el proyecto]
+```
 
 ---
 
-## ¿Cómo se hacía antes?
+## Anatomía de las instrucciones
 
-Antes de los archivos de instrucciones:
+Un buen archivo de instrucciones tiene estas secciones. Cada una responde una pregunta distinta que la IA necesita saber para trabajar bien en tu proyecto:
 
-**Opción 1: Repetir en cada conversación**
 ```
-"Contexto: proyecto TypeScript, Express, Prisma, PostgreSQL. 
-Convenciones: async/await, tipos explícitos, no any, errors con 
-middleware central. Ahora..."
+┌─────────────────────────────────────────────────────┐
+│             ARCHIVO DE INSTRUCCIONES                │
+│                                                     │
+│  1. Contexto del proyecto  ← ¿qué es esto?         │
+│  2. Stack tecnológico      ← ¿con qué trabaja?     │
+│  3. Estructura             ← ¿dónde va cada cosa?  │
+│  4. Convenciones           ← ¿cómo se hace aquí?   │
+│  5. Comandos importantes   ← ¿cómo se ejecuta?     │
+│  6. Lo que NUNCA hacer     ← ¿qué está prohibido?  │
+│  7. Flujo de trabajo       ← ¿cómo se contribuye?  │
+└─────────────────────────────────────────────────────┘
 ```
-Tedioso, inconsistente entre miembros del equipo.
 
-**Opción 2: Archivo de prompts personal**
-Guardar prompts en un README o Notion y copiar-pegar. Nadie lo mantiene actualizado.
+### 1. Contexto del proyecto
 
-**Opción 3: Nada**
-Resultado: la IA genera código que no sigue ninguna convención del proyecto.
+Qué es el proyecto, para qué sirve, quiénes lo usan. Le da a la IA el "porqué" de las decisiones.
+
+```markdown
+# API de Pagos — Backend
+
+Sistema de procesamiento de pagos para e-commerce. Maneja transacciones,
+reembolsos y conciliaciones. Procesa ~50k transacciones diarias.
+Cumplimiento PCI-DSS requerido en todo el código de pagos.
+```
+
+### 2. Stack tecnológico
+
+Lista concreta de tecnologías y versiones. Sin esto, la IA puede generar código para la versión equivocada.
+
+```markdown
+## Stack
+- Node.js 22 + TypeScript 5.6 strict
+- Express 4 (sin decoradores — sin NestJS)
+- Prisma 5 + PostgreSQL 15
+- Jest 29 + Supertest para tests
+- Zod para validación de inputs
+```
+
+### 3. Estructura del proyecto
+
+Dónde va cada tipo de archivo. La IA usa esto para decidir dónde crear o buscar cosas.
+
+```markdown
+## Estructura
+src/
+  controllers/  → HTTP handlers (solo validación y respuesta)
+  services/     → lógica de negocio
+  repositories/ → acceso a base de datos (solo aquí se usa Prisma)
+  middlewares/  → auth, errores, logging
+  schemas/      → validaciones Zod
+```
+
+### 4. Convenciones de código
+
+Las reglas que la IA debe seguir siempre. Incluye el **por qué** cuando no es obvio — así la IA las aplica también en casos que no anticipaste.
+
+```markdown
+## Convenciones
+- Nunca `any` en TypeScript — si el tipo no se conoce, investiga o pregunta
+- Errores: throw siempre ErrorTypes propios (ver src/errors/), nunca Error genérico
+- No queries directas a Prisma fuera de repositories/ — el resto usa el repositorio
+- Funciones de más de 20 líneas deben refactorizarse
+- Nombres de variables en inglés, comentarios en español
+```
+
+### 5. Comandos importantes
+
+Cómo se ejecuta, se testea, se construye. La IA los necesita para verificar que su código funciona.
+
+```markdown
+## Comandos
+npm run dev          → servidor en modo watch
+npm test             → tests unitarios
+npm run test:e2e     → tests de integración
+npm run build        → build de producción
+npm run lint         → ESLint + Prettier
+```
+
+### 6. Lo que NUNCA hacer
+
+Las reglas absolutas. Explica el motivo — así la IA aplica el espíritu, no solo la letra.
+
+```markdown
+## Prohibido
+- NUNCA loguear datos de tarjetas de crédito (cumplimiento PCI-DSS)
+- NUNCA usar console.log en producción — solo el logger de Winston
+- NUNCA commits directos a main — siempre PR con al menos 1 review
+- NUNCA hardcodear URLs o credenciales — siempre process.env.*
+```
+
+### 7. Flujo de trabajo
+
+Cómo se hacen las cosas en el equipo. Útil para agentes que crean PRs o siguen el proceso del proyecto.
+
+```markdown
+## Flujo
+1. Crear rama desde main: feat/*, fix/*, chore/*
+2. Commits en formato Conventional Commits
+3. PR con descripción y tests
+4. CI debe pasar antes de merge
+```
 
 ---
 
-## Archivos de instrucciones por herramienta
+## Dónde van los archivos
 
-Cada herramienta tiene su propio archivo de instrucciones. Recuerda: **el archivo sigue al producto, no al modelo**.
+Cada herramienta tiene su archivo. La regla es siempre la misma: **el archivo sigue al producto, no al modelo**.
 
-| Producto | Archivo global | Archivo por repo |
-|---|---|---|
-| GitHub Copilot CLI/VS Code | (en settings de VS Code) | `.github/copilot-instructions.md` |
-| GitHub Copilot CLI | (en settings del agente) | `AGENTS.md` |
+| Producto | Archivo global | Archivo por repositorio |
+|----------|---------------|------------------------|
 | Claude Code | `~/.claude/CLAUDE.md` | `CLAUDE.md` (raíz del repo) |
+| GitHub Copilot CLI/VS Code | (settings de VS Code) | `.github/copilot-instructions.md` |
 | Gemini CLI | `~/.gemini/GEMINI.md` | `GEMINI.md` (raíz del repo) |
-| Cursor | (en Cursor Settings) | `.cursorrules` / `.cursor/rules/*.mdc` |
+| Cursor | (Cursor Settings) | `.cursorrules` / `.cursor/rules/*.mdc` |
 
-### Precedencia
+### Precedencia: repo > global
 
-En todas las herramientas, el archivo del repositorio **tiene mayor prioridad** que el global:
+En todas las herramientas, el archivo del repositorio tiene mayor prioridad:
 
 ```
-[Instrucciones globales del usuario]
-      ↓ (se combinan, repo tiene prioridad)
-[Instrucciones del repositorio]
-      ↓ (resultado)
+[Instrucciones globales del usuario]  ← se aplican siempre
+        ↓ (el repo puede sobrescribir o añadir)
+[Instrucciones del repositorio]       ← más específicas, mayor prioridad
+        ↓
 [Contexto que recibe la IA]
 ```
 
----
-
-## Anatomía de buenas instrucciones
-
-Una buena instrucción tiene estas secciones:
-
-```markdown
-# Contexto del Proyecto
-Qué es el proyecto, para qué sirve, quiénes lo usan.
-
-## Stack Tecnológico
-Lista de tecnologías, frameworks y versiones.
-
-## Estructura del Proyecto
-Dónde va cada cosa (brevemente).
-
-## Convenciones de Código
-Reglas de estilo, naming, patrones a seguir.
-
-## Comandos Importantes
-npm run dev, npm test, npm run build, etc.
-
-## Lo que NUNCA debes hacer
-Reglas que nunca deben violarse (explica el por qué).
-
-## Cómo trabajar en este proyecto
-Flujo de trabajo esperado para nuevas features.
-```
+Esto permite tener instrucciones globales genéricas ("siempre TypeScript") y que cada repositorio las especialice ("en este repo, además, usa Zod para validaciones").
 
 ---
 
-## Instrucciones vs. Agentes
+## Instructions vs Agentes vs Skills
 
-Una confusión común es pensar que las instrucciones reemplazan a los agentes. Son complementarias:
+| | Instructions | Skills | Agentes |
+|--|--------------|--------|---------|
+| **Propósito** | Contexto del proyecto | Cómo ejecutar una tarea | Quién ejecuta una tarea |
+| **Cuándo está activo** | Toda sesión, siempre | Solo cuando se invoca | Solo cuando se lanza |
+| **Contenido** | Stack, convenciones, restricciones | Pasos de un procedimiento | Rol y comportamiento |
+| **Ejemplo** | "Usamos TypeScript strict" | "Para revisar PR: paso 1, 2, 3" | "Eres el revisor de código" |
 
-| Aspecto | Instrucciones del sistema | Agentes |
-|---|---|---|
-| Propósito | Contexto del proyecto | Tarea específica |
-| Alcance | Todas las conversaciones | Conversación específica |
-| Contenido | Convenciones, stack, estructura | Comportamiento especializado |
-| Ejemplos | "Usamos TypeScript estricto" | "Revisar PRs con criterio X" |
-
-:::tip La combinación ganadora
-El escenario ideal es: instrucciones del sistema que explican el proyecto + agentes especializados que saben cómo trabajar en ese contexto. Los agentes pueden incluir explícitamente el archivo de instrucciones del repo para tener ambos contextos.
+:::tip La combinación ideal
+Las instrucciones ponen el contexto del proyecto. Los agentes y skills usan ese contexto para hacer su trabajo. Un agente de revisión de PRs que lee `CLAUDE.md` ya sabe las convenciones del proyecto sin que se las repitas en sus propias instrucciones.
 :::
 
 ---
 
-## Instrucciones para equipos
+## Valor para equipos
 
-El mayor valor de los archivos de instrucciones en el repositorio es que se comparten con todo el equipo. Cuando alguien nuevo llega al proyecto:
+El mayor beneficio de los archivos de instrucciones en el repositorio es que viajan con el código:
 
 ```bash
-git clone proyecto
-# Las instrucciones de IA ya están incluidas
-# .github/copilot-instructions.md → Copilot ya sabe el contexto
-# CLAUDE.md → Claude Code ya sabe el contexto
-# .cursorrules → Cursor ya sabe el contexto
+git clone mi-proyecto
+# Ya incluye:
+# .github/copilot-instructions.md → Copilot ya conoce el proyecto
+# CLAUDE.md                       → Claude Code ya conoce el proyecto
+# .cursorrules                    → Cursor ya conoce el proyecto
 ```
 
-No hay "configuración de IA" manual que hacer. El contexto vive en el código.
+Cuando alguien nuevo llega al equipo, su herramienta de IA ya tiene el contexto. No hay "configuración de IA" manual. El onboarding de la IA está en el repo, junto con el del proyecto.

@@ -33,6 +33,13 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Tools',
+      items: [
+        'tools/index',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Agentes',
       items: [
         'agentes/index',

@@ -6,95 +6,128 @@ slug: /mcp-servers
 
 # ¿Qué son los MCP Servers?
 
-MCP (Model Context Protocol) es un **protocolo estándar abierto** que permite a las herramientas de IA comunicarse con fuentes de datos y herramientas externas de manera uniforme. Es el "USB" de la IA: un conector estándar que funciona con cualquier herramienta y cualquier fuente de datos.
+MCP (Model Context Protocol) es un **protocolo estándar abierto** que permite a la IA comunicarse con sistemas externos: bases de datos, APIs, servicios, el filesystem. Es el "USB" de la IA — un conector estándar que funciona igual sin importar qué herramienta de IA estés usando.
 
 ---
 
-## Definición
+## El problema que resuelven
 
-Un **MCP Server** es un proceso independiente que:
+Un modelo de IA por sí solo es ciego a todo lo que no le pasas directamente:
 
-1. Expone **herramientas** (tools) que la IA puede usar
-2. Expone **recursos** (resources) que la IA puede leer
-3. Usa el **protocolo MCP estándar** para comunicarse
-4. Puede conectarse a cualquier sistema: bases de datos, APIs, filesystem, etc.
-
-La IA actúa como **MCP Client** y se conecta a los servidores MCP para obtener capacidades adicionales.
-
----
-
-## ¿Qué problema resuelven los MCP Servers?
-
-### El problema: los modelos de IA son "ciegos" por defecto
-
-Un modelo de IA por sí solo solo puede:
-- Procesar el texto que le envías
-- Usar las herramientas básicas que el producto le da (leer archivos, ejecutar comandos)
-
-Un modelo de IA **no puede por defecto**:
-- Consultar tu base de datos en tiempo real
-- Leer emails de tu inbox
-- Interactuar con APIs de terceros
-- Acceder a sistemas internos de tu empresa
-- Leer documentación que no está en su contexto
-
-Con MCP Servers, la IA puede hacer todo esto.
-
----
-
-## ¿Cómo se hacía antes de MCP?
-
-Antes de MCP (y en herramientas que no lo soportan):
-
-**Opción 1: Copy-paste manual**
 ```
-Tú:  [Ejecutas query en DBeaver]
-Tú:  [Copias los resultados]
-Tú:  [Los pegas en el chat de IA]
-IA:  [Analiza los datos pegados]
+Sin MCP:
+  Tú   → [ejecutas query en DBeaver]
+  Tú   → [copias los resultados]
+  Tú   → [pegas en el chat de IA]
+  IA   → [analiza lo que pegaste]
+  [Lento, propenso a errores, sin contexto completo]
+
+Con MCP:
+  Tú   → "analiza los usuarios que se registraron esta semana"
+  IA   → [conecta al MCP Server de PostgreSQL]
+  IA   → [ejecuta la query directamente]
+  IA   → [analiza los resultados en tiempo real]
+  [La IA tiene acceso directo, sin intermediarios manuales]
 ```
-Lento, propenso a errores, sin contexto completo.
-
-**Opción 2: Integraciones custom por vendor**
-Cada herramienta de IA tenía sus propias integraciones propietarias:
-- GitHub Copilot tenía acceso a GitHub pero no a otras fuentes
-- ChatGPT tenía plugins pero con su propio formato
-- Incompatibles entre sí
-
-**Opción 3: Ningún acceso externo**
-La IA simplemente no tenía acceso a datos externos. Trabajo manual total.
 
 ---
 
-## Arquitectura de MCP
+## Anatomía de un MCP Server
+
+Un MCP Server tiene tres componentes que expone a la IA:
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  MCP SERVER                         │
+│                                                     │
+│  1. Tools (herramientas)  ← acciones que puede     │
+│                              ejecutar la IA         │
+│  2. Resources (recursos)  ← datos que puede leer   │
+│  3. Prompts (plantillas)  ← prompts predefinidos   │
+└─────────────────────────────────────────────────────┘
+```
+
+### 1. Tools — acciones
+
+Funciones que la IA puede **llamar** para realizar operaciones en el sistema externo:
+
+```
+MCP Server: PostgreSQL
+  Tools:
+    query("SELECT * FROM users WHERE created_at > ?")  → resultados
+    list_tables()                                       → lista de tablas
+    describe_table("orders")                            → esquema
+```
+
+### 2. Resources — datos de solo lectura
+
+Información que la IA puede **leer** como contexto, sin ejecutar acciones:
+
+```
+MCP Server: Filesystem
+  Resources:
+    file:///home/user/proyecto/README.md   → contenido del README
+    file:///home/user/proyecto/schema.sql  → esquema de la BD
+```
+
+### 3. Prompts — plantillas
+
+Prompts predefinidos que el servidor expone para tareas comunes:
+
+```
+MCP Server: GitHub
+  Prompts:
+    summarize_pr(pr_number)   → resume los cambios del PR
+    review_code(file_path)    → revisa el código con criterios estándar
+```
+
+---
+
+## Arquitectura
+
+La IA actúa como **MCP Client** y se conecta a uno o más MCP Servers:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   Claude / Gemini / Copilot             │
-│                      (MCP Client)                       │
-└───────────┬─────────────────────────────┬───────────────┘
-            │ MCP Protocol                │ MCP Protocol
-            ▼                             ▼
-┌───────────────────┐          ┌─────────────────────┐
-│   MCP Server:     │          │   MCP Server:        │
-│   Filesystem      │          │   PostgreSQL         │
-│                   │          │                      │
-│ Tools:            │          │ Tools:               │
-│ - read_file       │          │ - query              │
-│ - write_file      │          │ - list_tables        │
-│ - list_directory  │          │ - describe_table     │
-│                   │          │                      │
-│ Resources:        │          │ Resources:           │
-│ - file://...      │          │ - db://schema        │
-└───────────────────┘          └─────────────────────┘
+│              Claude / Gemini / Copilot                  │
+│                    (MCP Client)                         │
+└──────────┬──────────────────────────────┬───────────────┘
+           │ MCP Protocol                 │ MCP Protocol
+           ▼                              ▼
+┌──────────────────┐           ┌──────────────────────┐
+│  MCP Server:     │           │  MCP Server:         │
+│  Filesystem      │           │  PostgreSQL           │
+│                  │           │                      │
+│  Tools:          │           │  Tools:              │
+│  - read_file     │           │  - query             │
+│  - write_file    │           │  - list_tables       │
+│  - list_dir      │           │  - describe_table    │
+└──────────────────┘           └──────────────────────┘
 ```
+
+Cada servidor es un proceso independiente. La IA habla con todos ellos usando el mismo protocolo estándar.
 
 ---
 
-## Soporte MCP por herramienta
+## MCP vs Tools nativas
+
+Es importante distinguir MCP de las [tools nativas de Claude Code](/tools):
+
+| | Tools nativas (Read, Bash, etc.) | MCP Tools |
+|--|----------------------------------|-----------|
+| **Definidas por** | El producto (Claude Code) | Tú, o la comunidad |
+| **Instalación** | Siempre disponibles | Requieren configurar el servidor |
+| **Acceso a** | Sistema de archivos local, shell | Sistemas externos (BD, APIs, servicios) |
+| **Ejemplos** | `Read`, `Bash`, `Grep` | `query_database`, `send_slack_message` |
+
+Las tools nativas están siempre disponibles. Los MCP tools requieren que configures y levantes el servidor correspondiente.
+
+---
+
+## Soporte por herramienta
 
 | Herramienta | Soporte MCP | Configuración |
-|---|---|---|
+|-------------|-------------|---------------|
 | Claude Code | ✅ Nativo y completo | `~/.claude/settings.json` |
 | Gemini CLI | ✅ Nativo | `~/.gemini/settings.json` |
 | GitHub Copilot VS Code | ✅ Via extensiones | VS Code settings |
@@ -103,47 +136,29 @@ La IA simplemente no tenía acceso a datos externos. Trabajo manual total.
 
 ---
 
-## Tipos de MCP Servers disponibles
+## Servidores disponibles
 
-### Oficiales (Anthropic/comunidad)
+### Oficiales
 
-| Servidor | Qué hace |
-|---|---|
-| `@modelcontextprotocol/server-filesystem` | Acceso a archivos y directorios |
-| `@modelcontextprotocol/server-github` | API de GitHub (repos, PRs, issues) |
+| Servidor | Qué expone |
+|----------|-----------|
+| `@modelcontextprotocol/server-filesystem` | Leer/escribir archivos y directorios |
+| `@modelcontextprotocol/server-github` | Repos, PRs, issues, commits |
 | `@modelcontextprotocol/server-postgres` | Queries a PostgreSQL |
 | `@modelcontextprotocol/server-sqlite` | Base de datos SQLite local |
 | `@modelcontextprotocol/server-brave-search` | Búsqueda web con Brave |
 | `@modelcontextprotocol/server-slack` | Leer canales, enviar mensajes |
-| `@modelcontextprotocol/server-google-drive` | Acceso a Google Drive |
+| `@modelcontextprotocol/server-google-drive` | Listar, leer y crear documentos |
 
 ### Comunidad
-- Servidores para AWS, Azure, GCP
-- Integraciones con Jira, Linear, Notion
-- Acceso a bases de datos NoSQL (MongoDB, Redis)
+- AWS, Azure, GCP
+- Jira, Linear, Notion
+- MongoDB, Redis
 - Y cientos más en [modelcontextprotocol.io](https://modelcontextprotocol.io)
 
 ---
 
-## Conceptos clave de MCP
-
-### Tools (Herramientas)
-Funciones que la IA puede **llamar** para realizar acciones:
-- `read_file("/path/to/file")` → devuelve contenido del archivo
-- `query_database("SELECT * FROM users LIMIT 10")` → devuelve resultados
-
-### Resources (Recursos)
-Datos que la IA puede **leer** como contexto:
-- `file:///home/usuario/proyecto/README.md` → contenido del README
-- `db://mydb/schema` → esquema de la base de datos
-
-### Prompts (Plantillas)
-Plantillas de prompts predefinidas que el servidor expone:
-- `analyze_codebase` → prompt para analizar el código con el contexto del servidor
-
----
-
-## Configuración básica en Claude Code
+## Configuración en Claude Code
 
 ```json
 // ~/.claude/settings.json
@@ -154,7 +169,7 @@ Plantillas de prompts predefinidas que el servidor expone:
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/home/usuario/proyectos"
+        "/home/usuario/proyectos"   // ← limita el acceso a esta carpeta
       ]
     },
     "postgres": {
@@ -169,6 +184,24 @@ Plantillas de prompts predefinidas que el servidor expone:
 }
 ```
 
-:::warning Seguridad en MCP
-Los MCP Servers tienen acceso a los sistemas que configures. Un servidor de filesystem configurado con `/` tiene acceso a todo tu sistema. **Siempre limita el acceso al mínimo necesario**.
+Cada entrada en `mcpServers` levanta un proceso independiente. La IA puede usar sus tools desde cualquier conversación.
+
+---
+
+## MCP vs Hooks
+
+Otra confusión frecuente es entre MCP y Hooks. Son complementarios, no equivalentes:
+
+| | MCP Servers | Hooks |
+|--|-------------|-------|
+| **Propósito** | Dar acceso a sistemas externos | Interceptar acciones de Claude |
+| **Dirección** | Claude → Sistema externo | Evento → Script tuyo |
+| **Iniciativa** | Claude decide cuándo usarlo | Se dispara automáticamente |
+| **Ejemplo** | Claude consulta la BD de producción | Validar antes de que Claude escriba un archivo |
+
+:::warning Limita siempre el acceso
+Un MCP Server de filesystem configurado con `/` tiene acceso a todo tu sistema. Un servidor de PostgreSQL con un usuario admin puede ejecutar `DROP TABLE`. Siempre configura el acceso mínimo necesario:
+- Filesystem: apunta solo a la carpeta del proyecto
+- Base de datos: usa un usuario de solo lectura si es posible
+- APIs: usa tokens con los permisos mínimos requeridos
 :::
