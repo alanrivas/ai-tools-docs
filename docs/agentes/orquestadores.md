@@ -349,3 +349,378 @@ Resultado: APIs incompatibles, tests rotos
 - Necesitas **razonamiento continuo** y adaptativo
 - La tarea es **pequeña** (no merece la overhead)
 - Necesitas máxima **velocidad** y mínima latencia
+
+---
+
+# Otras Estrategias para Controlar el Contexto
+
+Además de orquestadores, existen otras técnicas complementarias para evitar alucinaciones y presión de contexto:
+
+---
+
+## 1. Resumen Iterativo (Prompt Compression)
+
+**Idea**: Cada N pasos, comprime el historial en un resumen corto.
+
+```
+Pasos 1-5 (detallados): 50K tokens
+  ↓ COMPRIME
+Resumen de pasos 1-5: 5K tokens
+
+Pasos 6-10 (detallados): 50K tokens
+  ↓ COMPRIME
+Resumen de pasos 6-10: 5K tokens
+
+Total acumulado: ~20K tokens (vs 500K sin compresión)
+```
+
+**Implementación**:
+```typescript
+const summaryPrompt = `
+Resumen ejecutivo de lo hecho hasta ahora:
+- Objetivo: ${goal}
+- Logros clave: ${achievements}
+- Decisiones importantes: ${decisions}
+- Próximo paso: ${nextStep}
+
+[NO incluyas intentos fallidos, razonamientos intermedios, o errores corregidos]
+`;
+
+// Reemplaza el historial largo con este resumen comprimido
+conversation.history = [summaryPrompt];
+```
+
+**Ventajas**: ✅ Retiene información clave, ✅ Reduce tokens drásticamente
+**Desventajas**: ❌ Pierde detalles, ❌ Requiere cuidado en qué se resume
+
+---
+
+## 2. Ventana Deslizante (Sliding Window)
+
+**Idea**: Mantén solo los últimos N mensajes del historial.
+
+```
+Historial completo:
+[Msg 1][Msg 2][Msg 3][Msg 4][Msg 5][Msg 6][Msg 7][Msg 8][Msg 9][Msg 10]
+
+Ventana deslizante (últimos 3):
+                                    [Msg 8][Msg 9][Msg 10]
+```
+
+**Implementación**:
+```typescript
+const MAX_HISTORY = 5; // últimos 5 mensajes
+
+if (conversation.history.length > MAX_HISTORY) {
+  conversation.history = conversation.history.slice(-MAX_HISTORY);
+}
+```
+
+**Mejor para**: Conversaciones largas donde solo lo reciente importa
+**Trade-off**: Pierdes contexto de decisiones anteriores
+
+---
+
+## 3. Recuperación Bajo Demanda (RAG - Retrieval Augmented Generation)
+
+**Idea**: En lugar de mantener todo en contexto, recupera información relevante cuando la necesitas.
+
+```
+Pregunta: "¿Cuál era el error de seguridad que encontramos en auth.ts?"
+
+En lugar de:
+  - Buscar en 150K tokens de historial
+  
+Con RAG:
+  - Query la base de datos de resultados anteriores
+  - Recupera: "Error XSS en línea 45 de auth.ts"
+  - Inserta solo eso en el contexto
+
+Contexto usado: 5K tokens (vs 150K)
+```
+
+**Implementación**:
+```typescript
+// Guardar resultados en una base de datos/índice
+await resultsDB.store({
+  id: "auth-xss",
+  content: "Error XSS en línea 45",
+  tags: ["security", "auth", "xss"]
+});
+
+// Recuperar cuando lo necesites
+const relevant = await resultsDB.search({
+  query: "error de seguridad auth",
+  limit: 5
+});
+
+// Agregalos al contexto actual
+const context = `
+Contexto relevante recuperado:
+${relevant.map(r => r.content).join("\n")}
+
+Nueva pregunta: ...
+`;
+```
+
+**Ventajas**: ✅ Escalable a tareas muy grandes, ✅ Acceso rápido a datos antiguos
+**Desventajas**: ❌ Requiere setup de base de datos, ❌ Puede perder contexto no indexado
+
+---
+
+## 4. Puntos de Control / Snapshots
+
+**Idea**: Guarda estados intermedios limpios para poder retomar sin desde cero.
+
+```
+[Estado A]
+  ↓ 100 pasos
+[Estado B] ← CHECKPOINT (guardar aquí)
+  ↓ 100 pasos
+[Estado C] ← CHECKPOINT
+  ↓ 100 pasos
+[Estado D]
+
+Si el agente falla: reinicia desde el checkpoint más reciente, no desde el inicio
+```
+
+**Implementación**:
+```typescript
+interface Checkpoint {
+  step: number;
+  state: object;
+  timestamp: Date;
+  contextTokensUsed: number;
+}
+
+const checkpoints: Checkpoint[] = [];
+
+// Cada 50 pasos
+if (stepCount % 50 === 0) {
+  checkpoints.push({
+    step: stepCount,
+    state: getCurrentState(),
+    timestamp: new Date(),
+    contextTokensUsed: tokenCounter.current()
+  });
+}
+
+// Si detectas que contexto es alto, puedes retomar desde el último checkpoint
+if (tokenCounter.current() > 180000) {
+  const lastCheckpoint = checkpoints[checkpoints.length - 1];
+  restoreState(lastCheckpoint.state);
+  conversation.reset(); // Limpia el historial
+}
+```
+
+**Ventajas**: ✅ Recuperación rápida, ✅ No pierdes progreso
+**Desventajas**: ❌ Requiere serialización de estado, ❌ Puede ocupar espacio en disco
+
+---
+
+## 5. Conteo de Tokens Preventivo
+
+**Idea**: Monitorea los tokens ANTES de cada paso. Si vas a exceder el límite, actúa preventivamente.
+
+```
+Token budget: 200K
+Current usage: 170K
+Tokens para siguiente paso: 25K
+Proyección: 195K ✅ (seguro)
+
+---
+
+Current usage: 180K
+Tokens para siguiente paso: 25K
+Proyección: 205K ❌ (OVERFLOW!)
+  → Acción: Resume el historial
+  → Acción: Descarta intentos fallidos
+  → Acción: Pasa a un nuevo agente
+```
+
+**Implementación**:
+```typescript
+const TOKEN_LIMIT = 200000;
+const SAFETY_THRESHOLD = 0.85; // Actuar al 85%
+
+async function executeStep(step: Task) {
+  const currentTokens = tokenCounter.estimate(conversation);
+  const nextTokens = tokenCounter.estimate(step.description);
+  
+  if (currentTokens + nextTokens > TOKEN_LIMIT * SAFETY_THRESHOLD) {
+    console.warn("⚠️ Contexto alto, trigger preventivo");
+    
+    if (currentTokens > TOKEN_LIMIT * 0.9) {
+      // Modo crítico: resumen y limpieza
+      await compressHistory();
+      await cleanupFailedAttempts();
+    } else {
+      // Modo normal: delegar a sub-agente
+      return await delegateToSubagent(step);
+    }
+  }
+  
+  return await executeDirectly(step);
+}
+```
+
+**Ventajas**: ✅ Previene alucinaciones antes de que ocurran
+**Desventajas**: ❌ Puede interrumpir flujo de trabajo
+
+---
+
+## 6. Restricciones Explícitas en las Instrucciones
+
+**Idea**: Dale al agente límites claros en sus instrucciones.
+
+```yaml
+# Mal
+instructions: |
+  Analiza el código y sugiere mejoras.
+
+# Bien
+instructions: |
+  Analiza el código.
+  - Revisa solo funciones > 30 líneas
+  - Reporta solo errores de seguridad crítica
+  - NO sugiera refactoring cosmético
+  - Responde siempre en JSON, nunca en prosa
+  - Máximo 10 issues por archivo
+```
+
+El agente con instrucciones específicas genera menos distracciones y usa contexto de forma más eficiente.
+
+**Ventajas**: ✅ Simple de implementar, ✅ Reduce output innecesario
+**Desventajas**: ❌ Limita flexibilidad del agente
+
+---
+
+## 7. Validación de Output Inteligente
+
+**Idea**: Valida que el output tiene sentido antes de acumularlo.
+
+```typescript
+async function validateOutput(output: any): Promise<boolean> {
+  const checks = [
+    () => output !== null && output !== undefined,
+    () => !hasHallucinations(output), // Detecta inconsistencias
+    () => isCoherent(output), // Verifica coherencia lógica
+    () => meetsRequirements(output) // Cumple el objetivo
+  ];
+  
+  const passed = checks.filter(check => check()).length / checks.length;
+  
+  if (passed < 0.8) {
+    console.warn("⚠️ Output tiene baja calidad, posible alucinación");
+    return false; // No acumules esto en el contexto
+  }
+  
+  return true;
+}
+
+// Uso
+if (!await validateOutput(agentOutput)) {
+  // Reinicia el paso, no acumules el resultado dudoso
+  return await retryStep(task);
+}
+```
+
+**Ventajas**: ✅ Detecta alucinaciones temprano, ✅ Evita propagar errores
+**Desventajas**: ❌ Requiere lógica de validación compleja
+
+---
+
+## 8. Memoria Jerárquica (Hierarchical Memory)
+
+**Idea**: Mantén múltiples niveles de memoria con diferentes períodos de retención.
+
+```
+CORTO PLAZO (olvida después de 2 pasos):
+- Últimas decisiones
+- Variables locales
+- Estado transitorio
+
+MEDIO PLAZO (olvida después de 50 pasos):
+- Decisiones importantes
+- Resultados parciales
+- Historial de bugs encontrados
+
+LARGO PLAZO (nunca olvida):
+- Objetivo global
+- Constraints del proyecto
+- Decisiones arquitectónicas
+- Hallazgos críticos
+```
+
+**Implementación**:
+```typescript
+class HierarchicalMemory {
+  shortTerm = new Map(); // Expires after 2 steps
+  mediumTerm = new Map(); // Expires after 50 steps
+  longTerm = new Map(); // Never expires
+  
+  remember(key: string, value: any, duration: 'short' | 'media' | 'long') {
+    if (duration === 'short') this.shortTerm.set(key, value);
+    if (duration === 'media') this.mediumTerm.set(key, value);
+    if (duration === 'long') this.longTerm.set(key, value);
+  }
+  
+  recall(key: string): any | null {
+    return this.shortTerm.get(key) 
+      || this.mediumTerm.get(key) 
+      || this.longTerm.get(key);
+  }
+}
+```
+
+**Ventajas**: ✅ Mantiene info importante, ✅ Limpia automáticamente
+**Desventajas**: ❌ Complejo de implementar bien
+
+---
+
+## Comparativa de Estrategias
+
+| Estrategia | Complejidad | Efectividad | Implementación |
+|---|---|---|---|
+| **Orquestadores** | Media | ⭐⭐⭐⭐⭐ | Requiere redesign |
+| **Resumen Iterativo** | Media | ⭐⭐⭐⭐ | Implementable rápido |
+| **Ventana Deslizante** | Baja | ⭐⭐⭐ | Muy simple |
+| **RAG** | Alta | ⭐⭐⭐⭐⭐ | Requiere infraestructura |
+| **Puntos de Control** | Media | ⭐⭐⭐⭐ | Moderado |
+| **Conteo de Tokens** | Baja | ⭐⭐⭐ | Muy simple |
+| **Restricciones Explícitas** | Baja | ⭐⭐⭐ | Inmediato |
+| **Validación de Output** | Media | ⭐⭐⭐ | Implementable |
+| **Memoria Jerárquica** | Alta | ⭐⭐⭐⭐ | Complejo |
+
+---
+
+## Recomendación Práctica: Combinación
+
+**Para máxima efectividad, combina múltiples estrategias:**
+
+```
+┌─ ORQUESTADOR (si descomposable)
+│
+├─ Conteo de tokens preventivo (simple, siempre)
+│
+├─ Restricciones explícitas (simple, inmediato)
+│
+├─ Validación de output (detecta errores temprano)
+│
+└─ Si contexto sigue alto:
+   ├─ Resumen iterativo (cada 50 pasos)
+   ├─ Puntos de control (cada 100 pasos)
+   └─ RAG (si tienes datos acumulados críticos)
+```
+
+**Estrategia mínima viable:**
+1. Restricciones explícitas
+2. Conteo preventivo
+3. Validación de output
+
+**Estrategia robusta:**
+1. Orquestadores (donde aplique)
+2. + Conteo preventivo
+3. + Resumen iterativo
+4. + Puntos de control
+5. + RAG (para datos críticos)
