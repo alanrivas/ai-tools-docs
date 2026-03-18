@@ -148,6 +148,60 @@ Una guía de errores comunes al usar agentes de IA y cómo evitarlos. Cada anti-
 
 ---
 
+## Anti-patrones de Orquestación
+
+### 1. Usar un único agente para tareas decomposables
+
+❌ **Anti-patrón**: Crear un "super-agente" que audita código, hace análisis de seguridad, genera tests, chequea performance y documenta todo en una sola sesión. El agente acumula todo el contexto (análisis, razonamientos intermedios, correcciones) y después de procesar 50 archivos, empieza a alucinar.
+
+El problema es que el agente nunca "olvida" sus pasos anteriores:
+```
+Paso 1: Analiza archivo 1 → contexto: 20K
+Paso 2: Analiza archivo 2 → contexto: 40K
+Paso 3: Analiza archivo 3 → contexto: 60K
+Paso 4: Analiza archivo 4 → contexto: 80K
+...
+Paso 25: contexto: 190K ← El agente empieza a inventar problemas
+```
+
+✅ **Mejor práctica**: Usa un **orquestador** con sub-agentes especializados cuando la tarea es decomposable. Cada sub-agente maneja una parte (seguridad, performance, calidad) y se descarta después, liberando contexto. El orquestador retiene solo los resultados, no los pasos internos.
+
+[👉 Lee más sobre orquestadores y delegación](./agentes/orquestadores.md)
+
+---
+
+### 2. Orquestador que retiene demasiado contexto
+
+❌ **Anti-patrón**: Crear un orquestador que guarda todo el historial de sub-tareas: "El sub-agente 1 intentó X, falló, intentó Y, falló, finalmente funcionó con Z...". Esto derrota el propósito de usar orquestación.
+
+✅ **Mejor práctica**: El orquestador debe retener **solo los resultados finales**:
+```json
+{
+  "file": "auth.ts",
+  "security_issues": [{ "type": "sql-injection", "line": 42 }],
+  "performance_warnings": [],
+  "test_coverage": 85
+}
+```
+
+No guardes: intentos fallidos, razonamientos intermedios, correcciones, logs de depuración. Solo estructuras de datos limpias.
+
+---
+
+### 3. Orquestadores para tareas pequeñas
+
+❌ **Anti-patrón**: Usar orquestadores para tareas triviales. Por ejemplo, revisar un archivo único con delegación multiparte consume más tokens que un agente único analizando ese archivo.
+
+✅ **Mejor práctica**: Usa orquestadores cuando:
+- La tarea procesa **múltiples artefactos** (10+ archivos, 5+ funciones)
+- Cada parte es **independiente** (no hay dependencias ocultas)
+- Tienes **especialistas definidos** para cada parte
+- Te importa más la **consistencia que la velocidad**
+
+Para tareas pequeñas, un agente único es más eficiente.
+
+---
+
 ### 2. Buscar archivos de config en la ruta del modelo
 
 ❌ **Anti-patrón**: Pensar que porque GitHub Copilot CLI está usando Claude Sonnet como modelo, los archivos de configuración deben estar en `~/.claude/` o en rutas relacionadas con Claude. O buscar configuración de Gemini CLI en rutas de OpenAI porque usa GPT-4 internamente.
