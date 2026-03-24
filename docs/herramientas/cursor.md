@@ -111,6 +111,10 @@ Todas las respuestas deben seguir este formato:
 Todo input debe validarse con Zod antes de pasarse al service layer.
 ```
 
+:::tip Referencia visual
+Para ver la estructura completa de carpetas de Cursor (`.cursorrules` vs `.cursor/`) y cómo se distribuye entre usuario y repo, consulta la [guía de estructura de carpetas](./estructura-carpetas.md#-cursor).
+:::
+
 ---
 
 ## Modo Agente en Cursor

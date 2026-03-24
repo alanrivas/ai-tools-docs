@@ -35,6 +35,10 @@ Las configuraciones globales aplican a todos los proyectos en los que trabajes.
 
 Las configuraciones de repositorio se comparten con todo el equipo via control de versiones.
 
+:::tip Referencia visual
+Para ver la estructura completa de carpetas de GitHub Copilot CLI y VS Code, y cómo se compara con otras herramientas, consulta la [guía de estructura de carpetas](./estructura-carpetas.md#-github-copilot-cli).
+:::
+
 ---
 
 ## Sistema de Agentes en GitHub Copilot CLI

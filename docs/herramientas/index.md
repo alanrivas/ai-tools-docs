@@ -149,3 +149,11 @@ gh copilot chat --agent=code-reviewer "Revisa este PR"
 :::info Pueden coexistir
 Nada impide usar **múltiples herramientas** según el contexto. Por ejemplo: Cursor para edición diaria + Claude Code para automatización con hooks + GitHub Copilot CLI para revisiones de PR.
 :::
+
+---
+
+## 📁 Dónde se guardan los agentes, skills y reglas
+
+Cada herramienta almacena sus configuraciones en carpetas específicas. A veces es obvio, a veces no.
+
+**[👉 Ver estructura completa de carpetas por herramienta](./estructura-carpetas.md)** ← Guía detallada con ejemplos, tablas comparativas y troubleshooting.

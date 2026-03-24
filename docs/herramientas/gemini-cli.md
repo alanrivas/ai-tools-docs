@@ -37,6 +37,10 @@ mi-proyecto/
 └── GEMINI.md          # Instrucciones específicas del proyecto
 ```
 
+:::tip Referencia visual
+Para ver la estructura completa de carpetas de Gemini CLI y cómo se compara con otras herramientas, consulta la [guía de estructura de carpetas](./estructura-carpetas.md#-gemini-cli).
+:::
+
 ---
 
 ## GEMINI.md — Instrucciones para Gemini CLI

@@ -40,6 +40,10 @@ mi-proyecto/
     └── settings.json  # Configuración por proyecto (sobreescribe global)
 ```
 
+:::tip Referencia visual
+Para ver la estructura completa de carpetas de Claude Code y cómo se compara con otras herramientas, consulta la [guía de estructura de carpetas](./estructura-carpetas.md#-claude-code).
+:::
+
 ---
 
 ## CLAUDE.md — El archivo de instrucciones

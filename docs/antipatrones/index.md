@@ -166,7 +166,7 @@ Paso 25: contexto: 190K ← El agente empieza a inventar problemas
 
 ✅ **Mejor práctica**: Usa un **orquestador** con sub-agentes especializados cuando la tarea es decomposable. Cada sub-agente maneja una parte (seguridad, performance, calidad) y se descarta después, liberando contexto. El orquestador retiene solo los resultados, no los pasos internos.
 
-[👉 Lee más sobre orquestadores y delegación](./agentes/orquestadores.md)
+[👉 Lee más sobre orquestadores y delegación](../agentes/orquestadores.md)
 
 ---
 
