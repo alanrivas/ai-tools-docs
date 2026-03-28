@@ -26,6 +26,70 @@ A mayor presión sobre el context window, más incoherencias y hallucinations.
 
 ---
 
+### Por qué ocurre: La atención se degrada bajo presión
+
+Los LLMs no son simples buffers de texto. Cada token que generan atiende a todos los tokens anteriores mediante mecanismos de atención. A medida que el contexto crece, la atención se **diluye**:
+
+```
+Contexto corto (5K tokens):
+Token actual ──→ [TODOS los tokens anteriores]
+Atención promedio por token: ALTA
+
+Contexto saturado (195K tokens):
+Token actual ──→ [TODOS los tokens anteriores]
+Atención promedio por token: MÍNIMA → instrucciones iniciales casi invisibles
+```
+
+Esto tiene consecuencias concretas conocidas como el **"Lost in the Middle" problem** (Shi et al., 2023): los LLMs recuerdan bien el inicio y el final del contexto, pero **olvidan el medio** — que es exactamente donde vive la mayor parte del trabajo acumulado.
+
+```
+Retención de información según posición en el contexto:
+
+100% ──┐                                      ┌── 90%
+       │ ↘                                ↗   │
+  50%  │   ↘                          ↗       │
+       │     ↘                    ↗           │
+  10%  │       ↘________________↗             │
+       └──────────────────────────────────────┘
+       Inicio                              Final
+          ↑                                  ↑
+       Instrucciones                    Últimas salidas
+       del agente                       del agente
+       (retenidas)                      (retenidas)
+
+       ↑___________ ZONA PERDIDA _____________↑
+       Historial de pasos 20-180, donde está
+       la mayor parte del razonamiento real
+```
+
+El resultado práctico: el agente empieza a **inventar** referencias a pasos que "recuerda" de forma difusa, repite trabajo ya hecho, o contradice decisiones anteriores sin saberlo.
+
+---
+
+### La presión se acelera con el razonamiento
+
+El razonamiento extendido (chain-of-thought) amplifica el problema porque cada paso genera texto adicional que el modelo necesita atender:
+
+```
+Sin razonamiento:
+  Paso: 50 tokens (input) → 100 tokens (output)
+  Acumulado por paso: ~150 tokens
+
+Con razonamiento:
+  Paso: 50 tokens (input)
+  + Razonamiento: 500 tokens ("Primero debo... luego...")
+  + Output: 100 tokens
+  Acumulado por paso: ~650 tokens
+
+Con 50 pasos:
+  Sin razonamiento: ~7.5K tokens → Sin problema
+  Con razonamiento: ~32.5K tokens → Presión real
+```
+
+Esta es una razón clave por la que tareas largas y complejas se degradan aunque el modelo tenga una ventana de contexto grande.
+
+---
+
 ## La Solución: Orquestación con Delegación
 
 Un **orquestador** es un agente coordinador que:
@@ -56,6 +120,317 @@ Un **orquestador** es un agente coordinador que:
 ```
 
 El orquestador acumula solo los **resultados relevantes**, no los pasos internos de cada sub-agente.
+
+---
+
+## Patrones de Orquestación
+
+Dependiendo de la estructura de la tarea, existen cuatro patrones fundamentales. Reconocer cuál aplica es el primer paso para diseñar un orquestador efectivo.
+
+---
+
+### Patrón 1: Fan-out / Fan-in
+
+**Cuándo usarlo:** Múltiples análisis independientes sobre el mismo input.
+
+```
+          ┌──→ Sub-agente A (análisis 1) ──┐
+Input ────┼──→ Sub-agente B (análisis 2) ──┼──→ Orquestador (combina) ──→ Output
+          └──→ Sub-agente C (análisis 3) ──┘
+```
+
+**Ejemplo real:** Auditar un archivo de código por seguridad, performance y calidad al mismo tiempo. Los tres sub-agentes reciben el mismo archivo, trabajan en paralelo, y el orquestador combina los tres reportes en uno.
+
+**Ventaja clave:** Los agentes corren en paralelo → menor latencia total.
+
+---
+
+### Patrón 2: Pipeline (Cadena)
+
+**Cuándo usarlo:** Cada paso transforma el output del anterior. Las etapas son secuenciales y la salida de una es la entrada de la siguiente.
+
+```
+Input → [Extractor] → datos brutos → [Transformador] → datos limpios → [Validador] → output
+```
+
+**Ejemplo real:** Procesar un repositorio de documentación:
+1. Extractor: lee todos los archivos `.md` y devuelve lista de secciones
+2. Clasificador: etiqueta cada sección (tutorial, referencia, conceptual)
+3. Indexador: genera el índice de búsqueda con metadatos
+
+Cada agente tiene un contexto limpio con solo su input específico. El orquestador pasa el output de uno al siguiente sin acumular todo el historial.
+
+**Ventaja clave:** Cada agente trabaja con datos ya procesados, más compactos que los originales.
+
+---
+
+### Patrón 3: Router
+
+**Cuándo usarlo:** El tipo de tarea no se sabe de antemano. El orquestador decide a qué especialista enviar según el input.
+
+```
+          ┌── [Especialista SQL] (si query = database)
+Input ──→ Router ──┼── [Especialista API] (si query = endpoint)
+          └── [Especialista DevOps] (si query = deployment)
+```
+
+**Ejemplo real:** Un agente de soporte técnico que recibe preguntas libres. El router analiza la pregunta y la desvía al especialista correcto, evitando que un único agente generalista cargue el conocimiento de todos los dominios.
+
+**Ventaja clave:** Los especialistas tienen instrucciones muy cortas y enfocadas → menor uso de contexto desde el inicio.
+
+---
+
+### Patrón 4: Map-Reduce
+
+**Cuándo usarlo:** La tarea escala horizontalmente sobre N elementos iguales. Similar a Fan-out pero con número variable de agentes.
+
+```
+Lista de N elementos:
+  [Item 1] → Sub-agente 1 → resultado 1 ──┐
+  [Item 2] → Sub-agente 2 → resultado 2 ──┤
+  [Item 3] → Sub-agente 3 → resultado 3 ──┼──→ Orquestador (reduce) → output final
+  ...                                      │
+  [Item N] → Sub-agente N → resultado N ──┘
+```
+
+**Ejemplo real:** Traducir 100 artículos de documentación. Cada sub-agente traduce un artículo (contexto limpio = 1 artículo), el orquestador recibe 100 traducciones completas y genera el índice final.
+
+**Ventaja clave:** Escala linealmente. Puedes procesar 10 o 10.000 elementos sin que el orquestador crezca en tokens.
+
+---
+
+## El Handoff: Comunicar Resultados entre Agentes
+
+El punto más crítico de la orquestación no es la delegación sino el **handoff**: cómo el resultado de un sub-agente se convierte en el input del siguiente (o del orquestador) sin perder información crítica y sin inflar el contexto.
+
+### Principio: Contrato de output explícito
+
+Cada sub-agente debe tener un **formato de salida definido** en sus instrucciones. Un sub-agente que responde en prosa libre obliga al orquestador a leer e interpretar todo el texto. Un sub-agente que responde en JSON estructurado permite al orquestador extraer exactamente lo que necesita.
+
+```
+❌ Sub-agente sin contrato:
+"He revisado el código y encontré varios problemas. El primero está
+en la línea 45 donde hay una posible inyección SQL. También noté que
+la función getUserById no valida el input, lo cual podría..."
+→ El orquestador debe leer 200 palabras para encontrar 2 datos
+
+✅ Sub-agente con contrato:
+{
+  "issues": [
+    { "type": "sql-injection", "line": 45, "severity": "critical" },
+    { "type": "missing-validation", "fn": "getUserById", "severity": "high" }
+  ],
+  "files_analyzed": 1,
+  "clean": false
+}
+→ El orquestador extrae exactamente lo que necesita en 5 líneas
+```
+
+### Patrón: Handoff comprimido
+
+Cuando el resultado de un agente es grande (ej: análisis de 50 archivos), no acumules todo en el contexto del orquestador. En cambio, pide al sub-agente que entregue un resumen ejecutivo más el detalle completo por separado:
+
+```typescript
+// El sub-agente devuelve dos niveles:
+interface AgentResult {
+  summary: string;         // 2-3 líneas → va al contexto del orquestador
+  full_report: string;     // Todo el detalle → se guarda en disco/DB
+  critical_items: string[]; // Solo los críticos → van al contexto
+}
+
+// El orquestador acumula solo los summaries y critical_items
+// El full_report queda disponible si alguien lo necesita después
+```
+
+### Patrón: Contexto compartido mínimo (Shared Scratch Pad)
+
+Para pipelines donde los agentes necesitan acceso a información común sin que cada uno cargue todo el historial, usa un "scratchpad" externo:
+
+```typescript
+// Un objeto de estado compartido, fuera del contexto de cualquier agente
+const sharedState = {
+  projectGoal: "Auditar seguridad del repositorio X",
+  constraints: ["No modificar código", "Priorizar OWASP Top 10"],
+  discoveries: [], // Cada sub-agente agrega sus hallazgos aquí
+};
+
+// Cada sub-agente recibe solo su parte:
+const subAgentInput = {
+  file: "auth.ts",
+  goal: sharedState.projectGoal,      // Solo el objetivo, no el historial
+  constraints: sharedState.constraints,
+  // NO incluye el historial completo de sharedState.discoveries
+};
+
+// Después de cada agente, el orquestador actualiza el estado compartido:
+sharedState.discoveries.push(agentOutput.summary);
+```
+
+---
+
+## Orquestación Paralela vs Secuencial
+
+La elección entre ejecutar sub-agentes en paralelo o en secuencia tiene implicaciones importantes en latencia, coste y corrección.
+
+### Paralela: Máxima velocidad, requiere independencia
+
+```typescript
+// ✅ Correcto: los tres análisis son independientes
+const [security, performance, quality] = await Promise.all([
+  runAgent('security-auditor', { file }),
+  runAgent('performance-profiler', { file }),
+  runAgent('quality-checker', { file }),
+]);
+```
+
+**Úsala cuando:** Los sub-agentes no necesitan el output de los demás para hacer su trabajo.
+
+**Cuidado con:** Si un sub-agente usa el resultado de otro (dependencia), la paralelización rompe la lógica y produce resultados incoherentes.
+
+### Secuencial: Menor velocidad, admite dependencias
+
+```typescript
+// ✅ Correcto: cada paso depende del anterior
+const structure = await runAgent('code-analyzer', { file });
+const issues    = await runAgent('security-auditor', { file, structure });
+const fixes     = await runAgent('fix-suggester', { file, issues });
+```
+
+**Úsala cuando:** El output de un agente es el input del siguiente.
+
+### Híbrida: Lo mejor de ambos mundos
+
+En la práctica, muchas tareas tienen una combinación: algunas fases son independientes (paralelas) y otras dependen de resultados previos (secuenciales).
+
+```
+Fase 1 (paralela): análisis estructural + análisis de seguridad
+      ↓
+Fase 2 (secuencial): combinar resultados → generar plan de fixes
+      ↓
+Fase 3 (paralela): aplicar fix A + aplicar fix B + aplicar fix C
+      ↓
+Fase 4 (secuencial): validar que todos los fixes sean coherentes entre sí
+```
+
+```typescript
+// Implementación del patrón híbrido
+async function orchestrate(file: string) {
+  // Fase 1: paralela
+  const [structure, security] = await Promise.all([
+    runAgent('code-analyzer', { file }),
+    runAgent('security-auditor', { file }),
+  ]);
+
+  // Fase 2: secuencial (depende de fase 1)
+  const fixPlan = await runAgent('fix-planner', { file, structure, security });
+
+  // Fase 3: paralela (cada fix es independiente)
+  const appliedFixes = await Promise.all(
+    fixPlan.fixes.map(fix => runAgent('fix-applier', { file, fix }))
+  );
+
+  // Fase 4: secuencial (requiere ver todos los fixes)
+  const validation = await runAgent('coherence-validator', { file, appliedFixes });
+
+  return { structure, security, fixPlan, appliedFixes, validation };
+}
+```
+
+---
+
+## Manejo de Fallos en Sub-agentes
+
+Un orquestador robusto necesita una estrategia clara para cuando un sub-agente falla, se atasca o produce output no válido.
+
+### Estrategia 1: Retry con contexto reducido
+
+Si un sub-agente falla, el primer intento de recuperación es reiniciarlo con un contexto más pequeño y específico:
+
+```typescript
+async function safeDelegate(agentName: string, input: object, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await runAgent(agentName, input);
+
+      if (!isValidOutput(result)) {
+        throw new Error(`Output inválido en intento ${attempt}`);
+      }
+
+      return result;
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
+
+      console.warn(`Sub-agente ${agentName} falló (intento ${attempt}), reintentando...`);
+
+      // En cada reintento, simplifica el input
+      input = simplifyInput(input, attempt);
+      await sleep(1000 * attempt); // backoff exponencial
+    }
+  }
+}
+
+function simplifyInput(input: object, attempt: number): object {
+  // Intento 2: quita campos opcionales
+  // Intento 3: deja solo el mínimo absoluto
+  const stripped = { ...input };
+  if (attempt >= 2) delete stripped['additionalContext'];
+  if (attempt >= 3) delete stripped['examples'];
+  return stripped;
+}
+```
+
+### Estrategia 2: Fallback a agente genérico
+
+Si el especialista falla repetidamente, el orquestador puede delegar a un agente más genérico como fallback:
+
+```typescript
+async function delegateWithFallback(task: Task) {
+  try {
+    return await runAgent(task.specialist, task.input);
+  } catch {
+    console.warn(`Especialista ${task.specialist} falló, usando agente genérico`);
+    return await runAgent('general-purpose', {
+      ...task.input,
+      instruction: `Actúa como ${task.specialist}. ${task.description}`,
+    });
+  }
+}
+```
+
+### Estrategia 3: Continuar sin el resultado fallido
+
+Para pipelines Fan-out donde el resultado de un sub-agente es opcional (no bloquea a los demás), el orquestador puede marcar la tarea como parcialmente completada y continuar:
+
+```typescript
+async function fanOutWithPartialResults(file: string) {
+  const tasks = [
+    { name: 'security-auditor', required: true },
+    { name: 'performance-profiler', required: false },
+    { name: 'style-checker', required: false },
+  ];
+
+  const results = await Promise.allSettled(
+    tasks.map(t => runAgent(t.name, { file }))
+  );
+
+  const report = {};
+  let hasRequiredFailures = false;
+
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      report[tasks[i].name] = result.value;
+    } else {
+      console.warn(`${tasks[i].name} falló: ${result.reason}`);
+      if (tasks[i].required) hasRequiredFailures = true;
+      report[tasks[i].name] = { skipped: true, reason: result.reason.message };
+    }
+  });
+
+  if (hasRequiredFailures) throw new Error('Sub-agente requerido falló, no se puede continuar');
+
+  return report; // Reporte parcial con lo que sí funcionó
+}
+```
 
 ---
 
@@ -129,34 +504,110 @@ instructions: |
   - Usa el mismo formato para todos
 ```
 
-### Paso 3: Implementar la Lógica de Orquestación
+### Paso 3: Implementar la Lógica de Orquestación con el SDK de Claude
 
-Si usas **GitHub Copilot CLI** o **Cursor**:
+A continuación un ejemplo concreto usando el SDK de Anthropic para TypeScript. Cada sub-agente es una llamada separada a la API → contexto nuevo y limpio en cada llamada:
 
 ```typescript
-// orchestrator-client.ts
-async function reviewCode(filePaths: string[]) {
-  const orchestrator = new Agent('code-review');
-  const results = [];
-  
-  for (const file of filePaths) {
-    // Cada iteración: nuevo contexto, sub-agente descartado después
-    const analysis = await orchestrator.delegate('code-analyzer', { file });
-    const security = await orchestrator.delegate('security-auditor', { file });
-    const perf = await orchestrator.delegate('performance-reviewer', { file });
-    
-    // Guardar solo los resultados, no el historial interno
-    results.push({
-      file,
-      analysis: analysis.output,
-      security: security.output,
-      performance: perf.output
-    });
+// orchestrator.ts
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+// ─── Sub-agentes: cada uno es una función con su propio contexto ───
+
+async function runCodeAnalyzer(fileContent: string) {
+  const response = await client.messages.create({
+    model: "claude-opus-4-6",
+    max_tokens: 1024,
+    system: `Eres un analizador de código. Tu única responsabilidad: analizar la estructura.
+Responde SIEMPRE con JSON válido:
+{
+  "functions": [{ "name": "...", "lines": 0, "complexity": "low|medium|high" }],
+  "dependencies": ["..."],
+  "total_lines": 0
+}
+NO hagas sugerencias. NO analices seguridad. Solo estructura.`,
+    messages: [{ role: "user", content: `Analiza este código:\n\n${fileContent}` }],
+  });
+
+  return JSON.parse(
+    (response.content[0] as { type: string; text: string }).text
+  );
+}
+
+async function runSecurityAuditor(fileContent: string) {
+  const response = await client.messages.create({
+    model: "claude-opus-4-6",
+    max_tokens: 1024,
+    system: `Eres un auditor de seguridad. Tu única responsabilidad: detectar vulnerabilidades OWASP.
+Responde SIEMPRE con JSON válido:
+{
+  "vulnerabilities": [{ "type": "...", "line": 0, "severity": "low|medium|high|critical", "fix": "..." }],
+  "clean": true
+}
+NO reportes problemas de calidad o performance. Solo seguridad.`,
+    messages: [{ role: "user", content: `Audita este código:\n\n${fileContent}` }],
+  });
+
+  return JSON.parse(
+    (response.content[0] as { type: string; text: string }).text
+  );
+}
+
+// ─── Orquestador: coordina, retiene solo resultados comprimidos ────
+
+async function orchestrateCodeReview(files: { name: string; content: string }[]) {
+  console.log(`Orquestando revisión de ${files.length} archivos...`);
+
+  const summaries: string[] = [];
+
+  for (const file of files) {
+    console.log(`  → Analizando ${file.name}`);
+
+    // Cada sub-agente tiene su propio contexto (llamadas independientes)
+    // Cuando terminan, sus contextos se descartan. Solo retenemos el JSON comprimido.
+    const [structure, security] = await Promise.all([
+      runCodeAnalyzer(file.content),
+      runSecurityAuditor(file.content),
+    ]);
+
+    const criticalIssues = security.vulnerabilities.filter(
+      (v: { severity: string }) => v.severity === "critical"
+    );
+
+    // El orquestador solo retiene el summary comprimido, no los ~50K tokens de cada análisis
+    summaries.push(
+      `${file.name}: ${structure.total_lines} líneas, ` +
+        `${structure.functions.length} funciones, ` +
+        `${criticalIssues.length} vulnerabilidades críticas`
+    );
   }
-  
-  return results;
+
+  // Paso final: el orquestador compila el reporte con solo los summaries (~tokens mínimos)
+  const finalReport = await client.messages.create({
+    model: "claude-opus-4-6",
+    max_tokens: 2048,
+    system: "Eres un director técnico. Recibes summaries de revisiones de código y generas un reporte ejecutivo.",
+    messages: [{
+      role: "user",
+      content: `Genera un reporte ejecutivo con estos resultados:\n\n${summaries.join("\n")}`,
+    }],
+  });
+
+  return {
+    summaries,
+    report: (finalReport.content[0] as { type: string; text: string }).text,
+    totalFiles: files.length,
+  };
 }
 ```
+
+**Qué hace bien este patrón:**
+- `runCodeAnalyzer` y `runSecurityAuditor` son llamadas de API independientes → contexto nuevo en cada una
+- `Promise.all` los ejecuta en paralelo → latencia del par = max(A, B), no A + B
+- El orquestador solo acumula los summaries en texto plano, no los JSON completos de cada análisis
+- La llamada final del reporte recibe solo N líneas de texto, no N archivos de código completos
 
 ---
 
@@ -233,6 +684,123 @@ Cada paso es independiente y se descarta el agente.
 - Type generator (solo tipos)
 
 Se ejecutan en paralelo, cada uno maneja su responsabilidad.
+
+---
+
+## Orquestación Multi-nivel: Orquestadores de Orquestadores
+
+Para tareas muy grandes, un único orquestador puede no ser suficiente. La solución es **anidar orquestadores**: un orquestador de alto nivel que coordina sub-orquestadores, cada uno responsable de un dominio.
+
+```
+                  MEGA-ORQUESTADOR
+                  (coordina dominios)
+                        ↓
+          ┌─────────────┴─────────────┐
+          ↓                           ↓
+  SUB-ORQUESTADOR A           SUB-ORQUESTADOR B
+  (dominio: seguridad)        (dominio: performance)
+          ↓                           ↓
+  ┌───────┴───────┐           ┌───────┴───────┐
+ Auth   API    DB            CPU   Memory   I/O
+auditor auditor auditor    profiler profiler profiler
+```
+
+**Ejemplo de caso de uso:** Auditar un sistema de microservicios con 200 servicios. Un solo orquestador no puede coordinar 200×3 sub-agentes eficientemente. La solución:
+
+```
+Mega-orquestador: divide los 200 servicios en 10 grupos de 20
+  → Sub-orquestador 1: audita servicios 1-20 (con sus propios sub-agentes)
+  → Sub-orquestador 2: audita servicios 21-40
+  ...
+  → Sub-orquestador 10: audita servicios 181-200
+
+Mega-orquestador: consolida los 10 reportes en uno
+```
+
+El mega-orquestador nunca ve el detalle de ningún servicio individual. Solo ve los reportes consolidados de cada sub-orquestador.
+
+**Regla práctica:** Si un orquestador necesita coordinar más de 20-30 sub-agentes, considera añadir un nivel intermedio.
+
+---
+
+## Observabilidad: Saber si el Orquestador está Funcionando
+
+Un orquestador sin observabilidad es una caja negra. Cuando algo sale mal (alucinación en un sub-agente, contexto que crece, latencia inesperada), necesitas saber exactamente dónde ocurrió.
+
+### Métricas clave a instrumentar
+
+```typescript
+interface AgentExecution {
+  agentName: string;
+  startTime: number;
+  endTime: number;
+  inputTokens: number;
+  outputTokens: number;
+  outputValid: boolean;
+  attempt: number;
+  error?: string;
+}
+
+class OrchestratorMonitor {
+  private executions: AgentExecution[] = [];
+  private totalContextBudget: number;
+
+  constructor(tokenBudget = 200000) {
+    this.totalContextBudget = tokenBudget;
+  }
+
+  log(execution: AgentExecution) {
+    this.executions.push(execution);
+    this.checkAlerts(execution);
+  }
+
+  private checkAlerts(exec: AgentExecution) {
+    const latency = exec.endTime - exec.startTime;
+
+    // Alerta: sub-agente tardó demasiado
+    if (latency > 30000) {
+      console.warn(`⚠️ ${exec.agentName} tardó ${latency}ms — posible loop o contexto muy grande`);
+    }
+
+    // Alerta: output no válido en primer intento
+    if (!exec.outputValid && exec.attempt === 1) {
+      console.warn(`⚠️ ${exec.agentName} produjo output inválido — posible alucinación`);
+    }
+
+    // Alerta: múltiples reintentos
+    if (exec.attempt > 2) {
+      console.error(`❌ ${exec.agentName} necesitó ${exec.attempt} intentos — revisar instrucciones`);
+    }
+  }
+
+  report() {
+    const totalInputTokens = this.executions.reduce((s, e) => s + e.inputTokens, 0);
+    const totalOutputTokens = this.executions.reduce((s, e) => s + e.outputTokens, 0);
+    const successRate = this.executions.filter(e => e.outputValid).length / this.executions.length;
+    const avgLatency = this.executions.reduce((s, e) => s + (e.endTime - e.startTime), 0) / this.executions.length;
+
+    console.log("─── Reporte de Orquestación ───");
+    console.log(`Sub-agentes ejecutados: ${this.executions.length}`);
+    console.log(`Tokens consumidos: ${totalInputTokens + totalOutputTokens} / ${this.totalContextBudget}`);
+    console.log(`Tasa de éxito: ${(successRate * 100).toFixed(1)}%`);
+    console.log(`Latencia promedio: ${avgLatency.toFixed(0)}ms`);
+
+    // Detectar el agente que más tokens consumió (candidato a optimizar)
+    const worst = this.executions.reduce((a, b) => (a.inputTokens > b.inputTokens ? a : b));
+    console.log(`Mayor consumidor: ${worst.agentName} (${worst.inputTokens} tokens de input)`);
+  }
+}
+```
+
+### Señales de alarma a monitorear
+
+| Señal | Qué indica | Acción |
+|-------|-----------|--------|
+| Sub-agente con output inválido en el primer intento | Instrucciones ambiguas o contexto de input muy grande | Simplificar instrucciones, reducir input |
+| Latencia 3× mayor que el promedio | El sub-agente está procesando demasiado | Reducir scope del sub-agente |
+| Orquestador acumula tokens rápido | El orquestador retiene demasiado de cada resultado | Comprimir outputs de sub-agentes |
+| Múltiples reintentos en el mismo agente | Instrucciones contradictorias o mal formadas | Revisar el contrato de output del agente |
+| Tasa de éxito < 90% | El sistema no es estable para producción | Revisar toda la arquitectura de agentes |
 
 ---
 
@@ -724,3 +1292,192 @@ class HierarchicalMemory {
 3. + Resumen iterativo
 4. + Puntos de control
 5. + RAG (para datos críticos)
+
+---
+
+## Ejemplo Completo: Orquestador de Documentación con Claude API
+
+Este ejemplo muestra un orquestador real que procesa un repositorio de documentación, generando un índice, detectando contenido desactualizado y sugiriendo secciones faltantes. Combina Fan-out, scratchpad compartido, handoff comprimido y manejo de fallos.
+
+```typescript
+// doc-orchestrator.ts
+import Anthropic from "@anthropic-ai/sdk";
+import * as fs from "fs";
+import * as path from "path";
+
+const client = new Anthropic();
+
+// ─── Tipos de contratos de output (cada agente los respeta) ──────────
+
+interface DocSummary {
+  file: string;
+  title: string;
+  topics: string[];
+  last_updated: string;
+  completeness: "complete" | "partial" | "stub";
+}
+
+interface GapAnalysis {
+  missing_topics: string[];
+  outdated_sections: string[];
+  suggested_new_docs: string[];
+}
+
+// ─── Sub-agente 1: Resumidor de documento ───────────────────────────
+
+async function summarizeDoc(filePath: string, content: string): Promise<DocSummary> {
+  const response = await client.messages.create({
+    model: "claude-haiku-4-5-20251001", // Modelo rápido para tareas simples
+    max_tokens: 512,
+    system: `Resume documentación técnica. Responde SOLO con JSON válido, sin texto extra:
+{
+  "file": "nombre del archivo",
+  "title": "título del documento",
+  "topics": ["tema1", "tema2"],
+  "last_updated": "YYYY-MM-DD o 'unknown'",
+  "completeness": "complete | partial | stub"
+}
+Un documento es "stub" si tiene menos de 200 palabras o solo placeholders.
+Un documento es "partial" si le faltan secciones o ejemplos claros.
+Un documento es "complete" si está bien desarrollado.`,
+    messages: [{
+      role: "user",
+      content: `Archivo: ${filePath}\n\nContenido:\n${content.slice(0, 3000)}`,
+    }],
+  });
+
+  const text = (response.content[0] as { type: string; text: string }).text;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Si el agente no devolvió JSON válido, retornamos un stub detectado
+    console.warn(`⚠️ summarizeDoc produjo output inválido para ${filePath}`);
+    return {
+      file: filePath,
+      title: path.basename(filePath, ".md"),
+      topics: [],
+      last_updated: "unknown",
+      completeness: "stub",
+    };
+  }
+}
+
+// ─── Sub-agente 2: Analista de brechas ───────────────────────────────
+
+async function analyzeGaps(summaries: DocSummary[]): Promise<GapAnalysis> {
+  // El orquestador pasa SOLO los summaries comprimidos, no el contenido completo
+  const summaryText = summaries
+    .map(s => `- ${s.file}: [${s.completeness}] temas: ${s.topics.join(", ")}`)
+    .join("\n");
+
+  const response = await client.messages.create({
+    model: "claude-opus-4-6",
+    max_tokens: 1024,
+    system: `Eres un experto en documentación técnica. Analiza brechas en una base de conocimiento.
+Responde SOLO con JSON válido:
+{
+  "missing_topics": ["tema que debería existir pero no está"],
+  "outdated_sections": ["archivo.md: razón por la que parece desactualizado"],
+  "suggested_new_docs": ["nombre-sugerido.md: qué debería cubrir"]
+}`,
+    messages: [{
+      role: "user",
+      content: `Analiza estas ${summaries.length} páginas de documentación:\n\n${summaryText}`,
+    }],
+  });
+
+  return JSON.parse(
+    (response.content[0] as { type: string; text: string }).text
+  );
+}
+
+// ─── Orquestador principal ────────────────────────────────────────────
+
+async function orchestrateDocReview(docsDir: string) {
+  console.log(`🔍 Iniciando revisión de documentación en: ${docsDir}`);
+
+  // Paso 1: Leer todos los archivos .md (el orquestador sabe qué hay)
+  const mdFiles = fs
+    .readdirSync(docsDir, { recursive: true })
+    .filter((f): f is string => typeof f === "string" && f.endsWith(".md"))
+    .map(f => path.join(docsDir, f));
+
+  console.log(`📄 Encontrados ${mdFiles.length} documentos`);
+
+  // Paso 2: Fan-out — cada documento se analiza en un sub-agente independiente
+  // Los sub-agentes corren en paralelo; cada uno tiene contexto limpio (solo su doc)
+  const summaryPromises = mdFiles.map(async (filePath) => {
+    const content = fs.readFileSync(filePath, "utf-8");
+    return summarizeDoc(filePath, content);
+    // Cuando termina, su contexto (~5K tokens) se descarta
+    // El orquestador retiene solo el DocSummary (~100 tokens)
+  });
+
+  // Esperamos todos en paralelo (Fan-in)
+  const summaries = await Promise.all(summaryPromises);
+
+  // Paso 3: El orquestador tiene N summaries comprimidos, no N documentos completos
+  const stubCount = summaries.filter(s => s.completeness === "stub").length;
+  const partialCount = summaries.filter(s => s.completeness === "partial").length;
+
+  console.log(`✅ Summaries obtenidos: ${summaries.length}`);
+  console.log(`   - Completos: ${summaries.length - stubCount - partialCount}`);
+  console.log(`   - Parciales: ${partialCount}`);
+  console.log(`   - Stubs: ${stubCount}`);
+
+  // Paso 4: Otro sub-agente analiza las brechas usando solo los summaries
+  // Este agente NO recibe el contenido completo de los docs
+  console.log(`\n🔍 Analizando brechas en la documentación...`);
+  const gaps = await analyzeGaps(summaries);
+
+  // Paso 5: El orquestador compila el reporte final
+  // Su contexto: N summaries + 1 gap analysis = mínimo de tokens
+  const report = {
+    totalDocs: summaries.length,
+    byCompleteness: {
+      complete: summaries.filter(s => s.completeness === "complete").length,
+      partial: partialCount,
+      stub: stubCount,
+    },
+    topicsFound: [...new Set(summaries.flatMap(s => s.topics))],
+    gaps,
+    actionItems: [
+      ...gaps.missing_topics.map(t => `📝 Crear documentación sobre: ${t}`),
+      ...gaps.outdated_sections.map(s => `🔄 Actualizar: ${s}`),
+      ...gaps.suggested_new_docs.map(d => `➕ Nuevo doc sugerido: ${d}`),
+    ],
+  };
+
+  console.log("\n─── Reporte Final ───");
+  console.log(JSON.stringify(report, null, 2));
+
+  return report;
+}
+
+// Ejecutar
+orchestrateDocReview("./docs").catch(console.error);
+```
+
+### Por qué este ejemplo controla el contexto
+
+| Decisión | Impacto en tokens |
+|----------|-------------------|
+| `content.slice(0, 3000)` en el summarizador | El sub-agente nunca ve más de 3K chars del documento |
+| `summaries` en lugar de contenido completo para gaps | El analizador recibe ~100 tokens por doc, no ~3K |
+| `claude-haiku` para summaries, `claude-opus` para análisis | Modelo barato y rápido para tarea simple; modelo potente solo donde importa |
+| Output JSON estricto con fallback | Si el agente alucina y no produce JSON, el orquestador no acumula basura |
+| `Promise.all` para los summaries | Latencia = tiempo del doc más lento, no suma de todos |
+
+### Escenario de tokens comparado
+
+```
+Sin orquestador (agente único que lee todo):
+  - Lee 20 docs × 3K tokens = 60K tokens de input
+  - Genera análisis: 20K tokens de output
+  - Historial acumulado al final: ~80K tokens → presión real
+
+Con este orquestador:
+  - Cada summarizer: ~3.5K tokens (input) + ~200 tokens (output) → se descarta
+  - Gap analyzer: ~2K tokens (summaries) + ~500 tokens (output)
+  - Total retenido por el orquestador al final: ~12K tokens → sin presión
+```
